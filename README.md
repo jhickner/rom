@@ -1,50 +1,72 @@
-# emu
+# rom
 
-A libretro frontend that renders into the terminal using the kitty graphics
-protocol, with real key-release input via the kitty keyboard protocol.
+Play ROMs directly in your terminal.
 
-Built and tested against SNES (snes9x), but nothing in the frontend is
-SNES-specific — geometry, pixel format, framerate, aspect ratio, and sample
-rate all come from the core at runtime.
+`rom` is a small libretro frontend for macOS. It renders native pixels through
+the kitty graphics protocol, handles real key-release events through the kitty
+keyboard protocol, and can recolour games to match your terminal theme.
 
-## Build
+It is built and tested against SNES (snes9x), but the frontend is not
+SNES-specific: geometry, pixel format, framerate, aspect ratio, and sample rate
+all come from the selected core at runtime.
+
+`rom` does not include games, BIOS files, or emulator cores. Only run software
+you are legally entitled to use.
+
+## Quick start
+
+You need:
+
+- macOS and the Xcode command-line tools (`xcode-select --install`)
+- [Ghostty](https://ghostty.org/) or [kitty](https://sw.kovidgoyal.net/kitty/)
+- a ROM and a matching libretro core
 
 ```sh
+git clone https://github.com/jhickner/rom
+cd rom
 make
+make core-snes
+./rom "path/to/game.sfc"
 ```
 
-Requires macOS (CoreAudio for output) and a terminal implementing the kitty
-graphics and keyboard protocols — Ghostty or kitty.
+The example builds the app and the SNES core. For a Game Boy Advance ROM, use
+`make core-gba` instead. If a core is missing, `rom` identifies the required
+file and prints the exact build command or upstream source repository.
+
+Run `rom` in a bare Ghostty or kitty window, not inside tmux. See
+[Terminal compatibility](#terminal-compatibility) for why.
+
+To put the executable on your path after building:
+
+```sh
+make install PREFIX="$HOME/.local"
+```
 
 ## Cores
 
-Cores are plain libretro `.dylib` files. Build them from source:
+Cores are plain libretro `.dylib` files. The verified build targets clone the
+upstream source under `vendor/`, compile it for your Mac, and copy the result
+into `cores/`:
 
 ```sh
-# SNES
-git clone --depth 1 https://github.com/libretro/snes9x vendor/snes9x
-make -C vendor/snes9x/libretro -j8
-cp vendor/snes9x/libretro/snes9x_libretro.dylib cores/
-
-# Game Boy Advance
-git clone --depth 1 https://github.com/libretro/mgba vendor/mgba
-make -C vendor/mgba -f Makefile.libretro CC='cc -DHAVE_LOCALE' -j8
-cp vendor/mgba/mgba_libretro.dylib cores/
+make core-snes
+make core-gba
 ```
 
-mGBA needs `-DHAVE_LOCALE` on macOS: it typedefs `locale_t` itself, which
-collides with the SDK's, and its `osx` branch does not define the guard that
-suppresses that. Passing the define through `CC` rather than `CFLAGS` matters —
-the makefile builds `CFLAGS` with `+=`, so assigning it on the command line
-would discard the architecture flags.
+Set `JOBS` to control build parallelism, for example `make core-snes JOBS=8`.
+Running a target again rebuilds the existing checkout without deleting local
+changes.
 
-Or install the RetroArch cask and use its core downloader; cores land in
-`~/Library/Application Support/RetroArch/cores`.
+For other systems, running the ROM once prints the required core filename and
+the upstream repository containing its libretro build. You can also use a core
+downloaded by RetroArch:
 
-Running a ROM with no matching core prints the build recipe for that platform.
+```sh
+./rom --core "$HOME/Library/Application Support/RetroArch/cores/gambatte_libretro.dylib" game.gbc
+```
 
-`emu` picks a core from the ROM extension and searches, in order:
-`~/.config/emu/cores/`, `./cores/`, then `<exedir>/../cores/`. Override with
+`rom` picks a core from the ROM extension and searches, in order:
+`~/.config/rom/cores/`, `./cores/`, then `<exedir>/../cores/`. Override with
 `--core <path>`.
 
 | Extension | Core |
@@ -56,17 +78,13 @@ Running a ROM with no matching core prints the build recipe for that platform.
 | `.md` `.gen` `.smd` | `genesis_plus_gx_libretro.dylib` |
 | `.pce` | `mednafen_pce_fast_libretro.dylib` |
 
-## Run
-
-```sh
-./emu "path/to/game.sfc"
-```
+## Terminal compatibility
 
 **Run it in a bare Ghostty or kitty window, not inside tmux.** tmux's graphics
 passthrough is slow and unreliable for animation, and it interferes with the
 keyboard protocol.
 
-On startup `emu` queries the terminal for the graphics protocol. If there is no
+On startup `rom` queries the terminal for the graphics protocol. If there is no
 answer it restores the terminal and exits with an explanation rather than
 filling the screen with escape sequences it cannot render. tmux swallows the
 reply even when the outer terminal supports the protocol, which is why running
@@ -79,7 +97,7 @@ held keys never lift, which makes games unplayable but leaves Escape working.
 
 **Inline (default).** The game plays in the normal terminal flow, at the
 platform's native resolution — one emulated pixel to one terminal pixel, no
-zooming. `emu` scrolls up just enough room at the cursor, draws there, and puts
+zooming. `rom` scrolls up just enough room at the cursor, draws there, and puts
 the status line directly beneath. Your scrollback is never cleared, and on exit
 the final frame stays on screen with the prompt below it, like any other
 command's output.
@@ -91,7 +109,7 @@ is 256×224 in 32×14 cells.
 `--scale N` zooms by whole multiples (2, 3, …). Zooming is done in the frontend
 with nearest-neighbour sampling so pixel art stays sharp rather than being
 smoothed by the terminal's scaler. If the requested zoom does not fit the
-window, `emu` steps it down to the largest one that does.
+window, `rom` steps it down to the largest one that does.
 
 **Fullscreen (`--fullscreen`).** The original behaviour: alt screen, image
 centred and zoomed to fill the window at the core's aspect ratio, status line
@@ -117,7 +135,7 @@ pinned to the bottom row. Restores your screen on exit.
 `--selftest` needs no terminal, which makes it useful for verifying a new core:
 
 ```sh
-./emu --selftest 900 --shot title.bmp game.sfc
+./rom --selftest 900 --shot title.bmp game.sfc
 ```
 
 ## Default keys
@@ -155,13 +173,13 @@ arrives as `=`; binding both means either works whatever your layout does.
 Quit deliberately takes a modifier — Escape is far too easy to hit by reflex
 mid-game, and it is unbound by default.
 
-`emu --keys` prints the bindings currently in effect, including any you have
+`rom --keys` prints the bindings currently in effect, including any you have
 rebound, without needing a ROM.
 
 ## Recolouring to the terminal theme
 
 `--recolor <mode>` remaps the game's colours to your terminal's palette, which
-`emu` reads at startup via the OSC 4 / 10 / 11 queries (Ghostty and kitty both
+`rom` reads at startup via the OSC 4 / 10 / 11 queries (Ghostty and kitty both
 answer). If the terminal does not reply, a built-in Tango palette stands in.
 
 | Mode | Effect |
@@ -209,7 +227,7 @@ snap to whichever accent happens to be nearest tints stonework at random.
 
 ## Auto-pause
 
-`emu` enables focus reporting (DECSET 1004) and pauses when the terminal window
+`rom` enables focus reporting (DECSET 1004) and pauses when the terminal window
 or pane loses focus, resuming when it comes back. Manual pause is tracked
 separately, so refocusing will not un-pause a game you paused yourself.
 
@@ -224,7 +242,7 @@ Disable with `pause_on_unfocus = false` in the config.
 
 ## Config
 
-Written to `~/.config/emu/config` on first run; edit and restart. Key names are
+Written to `~/.config/rom/config` on first run; edit and restart. Key names are
 single characters or one of: `Up Down Left Right Home End Insert Delete PageUp
 PageDown F1`–`F12` `Escape Tab Enter Backspace Space LShift RShift LCtrl RCtrl
 LAlt RAlt`.
@@ -270,17 +288,17 @@ extension. Overrides are applied in a second pass, so they win regardless of
 where they sit in the file, and they only touch the keys they name — everything
 else falls through from the general section.
 
-`emu --keys <rom>` prints the bindings and options that ROM's platform will
+`rom --keys <rom>` prints the bindings and options that ROM's platform will
 actually use, overrides included.
 
 ## Files
 
 | Path | Contents |
 |---|---|
-| `~/.config/emu/config` | Keybinds and options |
-| `~/.config/emu/saves/<rom>.srm` | Battery SRAM, autosaved every 5s when dirty and on exit |
-| `~/.config/emu/states/<rom>.state<n>` | Save states, slots 0–9 |
-| `~/.config/emu/emu.log` | Frontend and core logging |
+| `~/.config/rom/config` | Keybinds and options |
+| `~/.config/rom/saves/<rom>.srm` | Battery SRAM, autosaved every 5s when dirty and on exit |
+| `~/.config/rom/states/<rom>.state<n>` | Save states, slots 0–9 |
+| `~/.config/rom/rom.log` | Frontend and core logging |
 
 Saves and states are written to a temp file and renamed, so an interrupted
 write can't destroy a good save.

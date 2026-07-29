@@ -4,7 +4,7 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 static struct termios saved_tio;
 static bool have_saved;

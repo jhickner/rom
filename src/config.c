@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "emu.h"
+#include "rom.h"
 
 struct named { const char *name; uint32_t key; };
 

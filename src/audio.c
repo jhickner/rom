@@ -3,7 +3,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include "emu.h"
+#include "rom.h"
 
 #define RING_FRAMES 32768u          // power of two; ~1s at 32kHz
 #define RING_MASK   (RING_FRAMES - 1u)

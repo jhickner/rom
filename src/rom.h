@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include "libretro.h"
 
-#define APP_NAME "emu"
+#define APP_NAME "rom"            // executable and config-directory name
 #define MAX_STATE_SLOTS 10
 #define OSD_MSG_MAX 128
 #define MAX_HOTKEY_KEYS 3        // alternates per action, e.g. Ctrl+c / Ctrl+q

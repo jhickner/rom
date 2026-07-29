@@ -1,6 +1,6 @@
 # build artifacts
 *.o
-/emu
+/rom
 /kittybench
 
 # upstream core sources and built cores (see README for how to build)

@@ -5,7 +5,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 double now_sec(void) {
     struct timespec ts;

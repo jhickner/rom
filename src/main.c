@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 static Core       core;
 static Config     cfg;
@@ -537,17 +537,12 @@ static const struct {
     const char *sys;       // slug for [options.<sys>] sections
     const char *dylib;
     const char *repo;      // github path
-    const char *build;     // verified macOS recipe, NULL if untested here
+    const char *target;    // verified top-level make target, NULL if untested
 } CORES[] = {
     { "sfc smc fig", "snes", "snes9x_libretro.dylib", "libretro/snes9x",
-      "    git clone --depth 1 https://github.com/libretro/snes9x vendor/snes9x\n"
-      "    make -C vendor/snes9x/libretro -j8\n"
-      "    cp vendor/snes9x/libretro/snes9x_libretro.dylib cores/\n" },
+      "core-snes" },
     { "gba", "gba", "mgba_libretro.dylib", "libretro/mgba",
-      "    git clone --depth 1 https://github.com/libretro/mgba vendor/mgba\n"
-      // mgba typedefs locale_t itself, which collides with the macOS SDK.
-      "    make -C vendor/mgba -f Makefile.libretro CC='cc -DHAVE_LOCALE' -j8\n"
-      "    cp vendor/mgba/mgba_libretro.dylib cores/\n" },
+      "core-gba" },
     { "nes",        "nes",     "fceumm_libretro.dylib",
       "libretro/libretro-fceumm",          NULL },
     { "gb gbc",     "gb",      "gambatte_libretro.dylib",
@@ -621,8 +616,10 @@ static void print_missing_core(const char *rom) {
     fprintf(stderr, "  needs:    %s\n", CORES[i].dylib);
     fprintf(stderr, "  searched: %s/cores, ./cores, <exedir>/../cores\n\n",
             config_dir());
-    if (CORES[i].build) {
-        fprintf(stderr, "  build it from the emu directory:\n%s", CORES[i].build);
+    if (CORES[i].target) {
+        fprintf(stderr,
+                "  build and install it from the rom source directory:\n"
+                "    make %s\n", CORES[i].target);
     } else {
         fprintf(stderr, "  build it from https://github.com/%s\n"
                         "  (see that repo for its libretro target), then copy\n"
@@ -845,7 +842,7 @@ int main(int argc, char **argv) {
         char cb[600];
         if (!core_path) {
             if (find_core(cb, sizeof cb, rom, dirname(exedir0)) != 0) {
-                fprintf(stderr, APP_NAME ": no core found for %s\n", rom);
+                print_missing_core(rom);
                 return 1;
             }
             core_path = cb;
@@ -1114,7 +1111,7 @@ int main(int argc, char **argv) {
             char status[256];
             int aud_ms = audio ? (int)(audio_queued_frames(audio) * 1000.0 / rate) : -1;
             snprintf(status, sizeof status,
-                     "slot %d  emu %.0f  disp %.0f%s  drop %llu  aud %dms%s",
+                     "slot %d  core %.0f  disp %.0f%s  drop %llu  aud %dms%s",
                      slot, shown_fps, disp_fps, fast_forward ? " FF" : "",
                      drop_delta, aud_ms, muted ? "  MUTE" : "");
             renderer_set_status(&rend, status);

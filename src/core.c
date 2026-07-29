@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include "emu.h"
+#include "rom.h"
 
 static void *sym(void *h, const char *name, int *err) {
     void *p = dlsym(h, name);

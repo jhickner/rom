@@ -1,5 +1,5 @@
 #include <string.h>
-#include "emu.h"
+#include "rom.h"
 
 static const uint8_t bayer4[16] = {
      0,  8,  2, 10,

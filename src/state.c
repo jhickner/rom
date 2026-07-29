@@ -3,7 +3,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 static char g_base[256];
 static char g_states_dir[512];

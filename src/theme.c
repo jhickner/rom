@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 // Tango, used when the terminal will not tell us its palette.
 static const uint8_t fallback_pal[16][3] = {

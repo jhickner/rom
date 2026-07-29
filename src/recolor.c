@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include "emu.h"
+#include "rom.h"
 
 #define LUT_N 65536
 

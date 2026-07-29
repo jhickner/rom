@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 #define CHUNK 4096
 

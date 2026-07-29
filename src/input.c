@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include "emu.h"
+#include "rom.h"
 
 // Progressive enhancement flags: disambiguate (1) | report event types (2) |
 // report all keys as escape codes (8). Flag 8 is what makes plain letters
