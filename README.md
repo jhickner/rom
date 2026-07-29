@@ -89,7 +89,7 @@ Use `--core <path>` to select one directly.
 |---|---|
 | `--core <path>` | Use a specific core |
 | `--fullscreen` | Fill the terminal window |
-| `--scale <n>` | Integer zoom in inline mode, 1–8 |
+| `--scale <n>` | Integer zoom in inline mode, 1–8 (default 2) |
 | `--slot <n>` | Initial save-state slot, 0–9 |
 | `--no-audio` | Disable audio |
 | `--recolor <mode>` | `off`, `hue`, `nearest`, `duotone`, or `dither` |
@@ -99,8 +99,8 @@ Use `--core <path>` to select one directly.
 | `--shot <file>` | Save the final self-test frame as BMP |
 | `--force` | Skip terminal graphics detection |
 
-Inline mode is the default. It leaves scrollback intact and keeps the final
-frame on screen when the game exits.
+Inline mode is the default. It leaves scrollback intact and removes its Kitty
+image when the game exits.
 
 ### Controls
 

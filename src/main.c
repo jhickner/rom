@@ -39,7 +39,7 @@ static bool held_spec[KEY_MAX_ - 0xE000];
 static bool user_paused, focus_paused, muted, fast_forward, running = true;
 static int  slot;
 static int  max_send_w, max_send_h;      // cap transmitted size to the window
-static int  g_scale = 1;                 // requested integer zoom (inline mode)
+static int  g_scale = 2;                 // requested integer zoom (inline mode)
 static int  g_eff_scale = 1;             // zoom actually in use after fitting
 static uint8_t *g_zoom;                  // nearest-neighbour upscale buffer
 static size_t   g_zoom_cap;
@@ -519,7 +519,7 @@ static void on_winch(int sig) {
 // the real signal disposition still applies.
 static void on_fatal(int sig) {
     const char *restore =
-        "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[<u\x1b[2J\x1b[H\x1b[?25h\x1b[?1049l";
+        "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[<u\x1b[?25h\x1b[?1049l";
     (void)!write(term.fd, restore, strlen(restore));
     struct termios t;
     if (tcgetattr(term.fd, &t) == 0) {
@@ -639,7 +639,7 @@ static void usage(void) {
         "  --no-audio      disable audio output\n"
         "  --inline        play inline at native resolution (default)\n"
         "  --fullscreen    take over the screen and zoom to fit\n"
-        "  --scale <n>     integer zoom for inline mode (overrides config)\n"
+        "  --scale <n>     integer zoom for inline mode (default 2)\n"
         "  --recolor <m>   try to match colours to your terminal theme:\n"
         "                  off | hue | nearest | duotone | dither\n"
         "  --recolor-strength <0..1>   blend against the original (default 1)\n"

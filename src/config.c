@@ -124,7 +124,7 @@ void config_defaults(Config *c) {
     c->pause_on_unfocus = true;
     c->recolor = RECOLOR_OFF;
     c->recolor_strength = 1.0;
-    c->scale = 1;
+    c->scale = 2;
 }
 
 static char *trim(char *s) {
