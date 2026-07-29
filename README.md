@@ -18,16 +18,30 @@ graphics and keyboard protocols — Ghostty or kitty.
 
 ## Cores
 
-Cores are plain libretro `.dylib` files. Build one from source:
+Cores are plain libretro `.dylib` files. Build them from source:
 
 ```sh
+# SNES
 git clone --depth 1 https://github.com/libretro/snes9x vendor/snes9x
 make -C vendor/snes9x/libretro -j8
 cp vendor/snes9x/libretro/snes9x_libretro.dylib cores/
+
+# Game Boy Advance
+git clone --depth 1 https://github.com/libretro/mgba vendor/mgba
+make -C vendor/mgba -f Makefile.libretro CC='cc -DHAVE_LOCALE' -j8
+cp vendor/mgba/mgba_libretro.dylib cores/
 ```
+
+mGBA needs `-DHAVE_LOCALE` on macOS: it typedefs `locale_t` itself, which
+collides with the SDK's, and its `osx` branch does not define the guard that
+suppresses that. Passing the define through `CC` rather than `CFLAGS` matters —
+the makefile builds `CFLAGS` with `+=`, so assigning it on the command line
+would discard the architecture flags.
 
 Or install the RetroArch cask and use its core downloader; cores land in
 `~/Library/Application Support/RetroArch/cores`.
+
+Running a ROM with no matching core prints the build recipe for that platform.
 
 `emu` picks a core from the ROM extension and searches, in order:
 `~/.config/emu/cores/`, `./cores/`, then `<exedir>/../cores/`. Override with

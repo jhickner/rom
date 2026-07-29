@@ -530,36 +530,61 @@ static void on_fatal(int sig) {
 
 // ------------------------------------------------------------- core lookup
 
+// One table drives core selection, the per-platform config slug, and the
+// build hint printed when a core is missing.
+static const struct {
+    const char *exts;      // space separated
+    const char *sys;       // slug for [options.<sys>] sections
+    const char *dylib;
+    const char *repo;      // github path
+    const char *build;     // verified macOS recipe, NULL if untested here
+} CORES[] = {
+    { "sfc smc fig", "snes", "snes9x_libretro.dylib", "libretro/snes9x",
+      "    git clone --depth 1 https://github.com/libretro/snes9x vendor/snes9x\n"
+      "    make -C vendor/snes9x/libretro -j8\n"
+      "    cp vendor/snes9x/libretro/snes9x_libretro.dylib cores/\n" },
+    { "gba", "gba", "mgba_libretro.dylib", "libretro/mgba",
+      "    git clone --depth 1 https://github.com/libretro/mgba vendor/mgba\n"
+      // mgba typedefs locale_t itself, which collides with the macOS SDK.
+      "    make -C vendor/mgba -f Makefile.libretro CC='cc -DHAVE_LOCALE' -j8\n"
+      "    cp vendor/mgba/mgba_libretro.dylib cores/\n" },
+    { "nes",        "nes",     "fceumm_libretro.dylib",
+      "libretro/libretro-fceumm",          NULL },
+    { "gb gbc",     "gb",      "gambatte_libretro.dylib",
+      "libretro/gambatte-libretro",        NULL },
+    { "md gen smd", "genesis", "genesis_plus_gx_libretro.dylib",
+      "libretro/Genesis-Plus-GX",          NULL },
+    { "pce",        "pce",     "mednafen_pce_fast_libretro.dylib",
+      "libretro/beetle-pce-fast-libretro", NULL },
+};
+#define NCORES ((int)(sizeof CORES / sizeof CORES[0]))
+
+static int core_entry_for(const char *rom) {
+    const char *dot = rom ? strrchr(rom, '.') : NULL;
+    if (!dot) return -1;
+    dot++;
+    size_t n = strlen(dot);
+    for (int i = 0; i < NCORES; i++) {
+        const char *p = CORES[i].exts;
+        while (*p) {
+            const char *sp = strchr(p, ' ');
+            size_t len = sp ? (size_t)(sp - p) : strlen(p);
+            if (len == n && strncasecmp(p, dot, len) == 0) return i;
+            p = sp ? sp + 1 : p + len;
+        }
+    }
+    return -1;
+}
+
 // Slug used to select per-platform config sections, e.g. [options.gb].
 static const char *system_for_ext(const char *rom) {
-    const char *dot = rom ? strrchr(rom, '.') : NULL;
-    if (!dot) return "";
-    dot++;
-    if (!strcasecmp(dot, "sfc") || !strcasecmp(dot, "smc") || !strcasecmp(dot, "fig"))
-        return "snes";
-    if (!strcasecmp(dot, "nes")) return "nes";
-    if (!strcasecmp(dot, "gb") || !strcasecmp(dot, "gbc")) return "gb";
-    if (!strcasecmp(dot, "gba")) return "gba";
-    if (!strcasecmp(dot, "md") || !strcasecmp(dot, "gen") || !strcasecmp(dot, "smd"))
-        return "genesis";
-    if (!strcasecmp(dot, "pce")) return "pce";
-    return "";
+    int i = core_entry_for(rom);
+    return i < 0 ? "" : CORES[i].sys;
 }
 
 static const char *core_for_ext(const char *rom) {
-    const char *dot = strrchr(rom, '.');
-    if (!dot) return NULL;
-    dot++;
-    if (!strcasecmp(dot, "sfc") || !strcasecmp(dot, "smc") || !strcasecmp(dot, "fig"))
-        return "snes9x_libretro.dylib";
-    if (!strcasecmp(dot, "nes")) return "fceumm_libretro.dylib";
-    if (!strcasecmp(dot, "gb") || !strcasecmp(dot, "gbc"))
-        return "gambatte_libretro.dylib";
-    if (!strcasecmp(dot, "gba")) return "mgba_libretro.dylib";
-    if (!strcasecmp(dot, "md") || !strcasecmp(dot, "gen") || !strcasecmp(dot, "smd"))
-        return "genesis_plus_gx_libretro.dylib";
-    if (!strcasecmp(dot, "pce")) return "mednafen_pce_fast_libretro.dylib";
-    return NULL;
+    int i = core_entry_for(rom);
+    return i < 0 ? NULL : CORES[i].dylib;
 }
 
 static bool file_exists(const char *p) {
@@ -583,6 +608,28 @@ static int find_core(char *out, size_t cap, const char *rom, const char *exedir)
     }
     snprintf(out, cap, "%s", name);
     return -1;
+}
+
+// Saying where to put a core is not much help without saying how to get one.
+static void print_missing_core(const char *rom) {
+    int i = core_entry_for(rom);
+    fprintf(stderr, APP_NAME ": no core found for %s\n", rom);
+    if (i < 0) {
+        fprintf(stderr, "  unrecognised extension - pass --core <path.dylib>\n");
+        return;
+    }
+    fprintf(stderr, "  needs:    %s\n", CORES[i].dylib);
+    fprintf(stderr, "  searched: %s/cores, ./cores, <exedir>/../cores\n\n",
+            config_dir());
+    if (CORES[i].build) {
+        fprintf(stderr, "  build it from the emu directory:\n%s", CORES[i].build);
+    } else {
+        fprintf(stderr, "  build it from https://github.com/%s\n"
+                        "  (see that repo for its libretro target), then copy\n"
+                        "  %s into cores/\n", CORES[i].repo, CORES[i].dylib);
+    }
+    fprintf(stderr, "\n  or point at one you already have:\n"
+                    "    " APP_NAME " --core <path.dylib> \"%s\"\n", rom);
 }
 
 static void usage(void) {
@@ -844,9 +891,7 @@ int main(int argc, char **argv) {
     char corebuf[600];
     if (!core_path) {
         if (find_core(corebuf, sizeof corebuf, rom, ed) != 0) {
-            fprintf(stderr, APP_NAME ": no core found for %s (looked for %s)\n"
-                            "  place it in %s/cores/ or pass --core\n",
-                    rom, corebuf, config_dir());
+            print_missing_core(rom);
             return 1;
         }
         core_path = corebuf;
