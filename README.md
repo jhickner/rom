@@ -22,9 +22,19 @@ foreground and background, matches colors perceptually in Oklab, and builds a
 actual theme with no per-frame palette analysis, no color shimmer, and
 negligible runtime cost.
 
-| Metroid Fusion — `hue` | Advance Wars — `dither` | Castlevania: Aria of Sorrow — `duotone` |
-|---|---|---|
-| ![Metroid Fusion recolored in hue mode](docs/screenshots/metroid-fusion-hue.png) | ![Advance Wars recolored with terminal-palette dithering](docs/screenshots/advance-wars-dither.png) | ![Castlevania Aria of Sorrow recolored in duotone mode](docs/screenshots/castlevania-aria-of-sorrow-duotone.png) |
+These are literal terminal captures, not exported framebuffers:
+
+**Metroid Fusion — `hue`**
+
+![Metroid Fusion running inline in the terminal with hue recoloring](docs/screenshots/metroid-fusion-hue.png)
+
+**Advance Wars — `dither`**
+
+![Advance Wars running inline in the terminal with terminal-palette dithering](docs/screenshots/advance-wars-dither.png)
+
+**Castlevania: Aria of Sorrow — `duotone`**
+
+![Castlevania Aria of Sorrow running inline in the terminal with duotone recoloring](docs/screenshots/castlevania-aria-of-sorrow-duotone.png)
 
 `hue` keeps the game's shading while adopting the nearest theme hues.
 `nearest` goes all-in on the terminal's 16-color identity, `duotone` maps the
