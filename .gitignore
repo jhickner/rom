@@ -1,0 +1,21 @@
+# build artifacts
+*.o
+/emu
+/kittybench
+
+# upstream core sources and built cores (see README for how to build)
+/vendor/
+/cores/*.dylib
+
+# ROMs. *.md and *.gen are omitted on purpose: they collide with markdown
+# and with generated files. Keep Genesis ROMs under roms/.
+*.sfc
+*.smc
+*.fig
+*.nes
+*.gb
+*.gbc
+*.gba
+*.smd
+*.pce
+/roms/
