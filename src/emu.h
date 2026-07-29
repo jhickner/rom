@@ -47,6 +47,7 @@ uint32_t key_from_name(const char *name);
 enum {
     HK_QUIT, HK_PAUSE, HK_RESET, HK_SAVE_STATE, HK_LOAD_STATE,
     HK_SLOT_NEXT, HK_SLOT_PREV, HK_FAST_FORWARD, HK_MUTE, HK_STATS,
+    HK_RECOLOR,
     HK_COUNT
 };
 
@@ -57,6 +58,8 @@ typedef struct {
     bool     integer_scale;    // snap image to whole multiples of native size
     bool     show_stats;
     bool     pause_on_unfocus; // pause when the terminal loses focus
+    int      recolor;          // RECOLOR_*
+    double   recolor_strength; // 0..1 blend against the original colours
 } Config;
 
 void config_defaults(Config *c);
@@ -100,6 +103,36 @@ int  core_load(Core *c, const char *path);
 int  core_load_game(Core *c, const char *rom_path);
 void core_unload(Core *c);
 
+// ---------------------------------------------------------------- theme
+
+typedef struct {
+    uint8_t pal[16][3];      // ANSI 0-15
+    uint8_t fg[3], bg[3];
+    bool    from_terminal;   // false means the built-in fallback is in use
+} Theme;
+
+void theme_fallback(Theme *t);
+// Queries the terminal's palette via OSC 4/10/11. Returns 0 if it answered.
+int  theme_query(Theme *t, int ttyfd);
+
+// -------------------------------------------------------------- recolor
+
+enum {
+    RECOLOR_OFF, RECOLOR_HUE, RECOLOR_NEAREST, RECOLOR_DUOTONE, RECOLOR_DITHER,
+    RECOLOR_COUNT
+};
+
+typedef struct {
+    int      mode;
+    uint8_t *lut;    // 65536 * 3, one RGB24 result per RGB565 input
+    uint8_t *pair;   // 65536 * 7, dither: rgbA, rgbB, bayer threshold 0-15
+} Recolor;
+
+int  recolor_build(Recolor *rc, int mode, const Theme *t, double strength);
+void recolor_free(Recolor *rc);
+int  recolor_mode_from_name(const char *s);
+const char *recolor_mode_name(int mode);
+
 // ---------------------------------------------------------------- video
 
 typedef struct {
@@ -111,7 +144,7 @@ typedef struct {
 // Convert a core framebuffer to packed RGB24, honoring pitch. Returns bytes
 // written, or 0 on unsupported format.
 size_t video_convert(uint8_t *dst, const void *src, unsigned w, unsigned h,
-                     size_t pitch, unsigned pixfmt);
+                     size_t pitch, unsigned pixfmt, const Recolor *rc);
 
 // Box-downscale RGB24. Only used when the source is larger than the target.
 void video_downscale(uint8_t *dst, int dw, int dh,

@@ -2,7 +2,7 @@ CC      ?= cc
 CFLAGS  ?= -O2 -g
 CFLAGS  += -std=c11 -Wall -Wextra -D_DARWIN_C_SOURCE
 LDFLAGS += -framework AudioToolbox -framework AudioUnit -framework CoreFoundation
-LDFLAGS += -lpthread
+LDFLAGS += -lpthread -lm
 
 SRC  := $(wildcard src/*.c)
 OBJ  := $(SRC:.c=.o)

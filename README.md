@@ -93,6 +93,8 @@ pinned to the bottom row. Restores your screen on exit.
 | `--inline` | Play inline at native resolution (default) |
 | `--fullscreen` | Take over the screen and zoom to fit |
 | `--scale <n>` | Integer zoom for inline mode (default 1, max 8) |
+| `--recolor <mode>` | `off` \| `hue` \| `nearest` \| `duotone` \| `dither` |
+| `--recolor-strength <0..1>` | Blend the recolour against the original (default 1) |
 | `--keys` | Print the current keybinds and exit |
 | `--force` | Run even if the terminal does not ack kitty graphics |
 | `--selftest <n>` | Run `n` frames headlessly, check states and SRAM, exit |
@@ -128,6 +130,7 @@ Hotkeys:
 | F6 / F7 | Previous / next slot |
 | F5 | Reset |
 | Tab (hold) | Fast-forward |
+| F8 | Cycle recolour mode |
 | `m` | Mute |
 
 Quit deliberately takes a modifier — Escape is far too easy to hit by reflex
@@ -135,6 +138,55 @@ mid-game, and it is unbound by default.
 
 `emu --keys` prints the bindings currently in effect, including any you have
 rebound, without needing a ROM.
+
+## Recolouring to the terminal theme
+
+`--recolor <mode>` remaps the game's colours to your terminal's palette, which
+`emu` reads at startup via the OSC 4 / 10 / 11 queries (Ghostty and kitty both
+answer). If the terminal does not reply, a built-in Tango palette stands in.
+
+| Mode | Effect |
+|---|---|
+| `off` | No remapping (default) |
+| `hue` | Keep each pixel's lightness and saturation, adopt the nearest theme hue. Structure and shading survive intact — the recommended starting point |
+| `nearest` | Hard-map every pixel to its closest theme colour. Strongest "terminal" look, flattens gradients |
+| `duotone` | Map lightness across the background-to-foreground ramp |
+| `dither` | Ordered 4×4 dither between the two closest theme colours, recovering tones a hard map would flatten |
+
+`--recolor-strength <0..1>` blends against the original, so you can dial the
+effect down. **F8 cycles modes at runtime**, which is the fastest way to find a
+look you like.
+
+Set it permanently in the config:
+
+```ini
+[options]
+recolor          = hue
+recolor_strength = 1.00
+```
+
+### How it works
+
+Cores hand out finished RGB frames, not palettes — snes9x exports SRAM, WRAM
+and VRAM through libretro, but not CGRAM. That turns out not to matter: by the
+time a frame exists it has already been through colour math, windowing, mosaic
+and brightness, so the palette would not describe the pixels anyway. Working on
+the output is both simpler and core-agnostic.
+
+Since snes9x emits RGB565, a 65,536-entry table covers **every possible input
+colour exactly** — no approximation and no per-frame colour analysis. Mapping
+happens once when the table is built (9 ms), and per-pixel cost drops to a
+single indexed load. Measured overhead is a few percent of total frame time,
+which at ~45× realtime is irrelevant.
+
+A static table also means the result is temporally stable. Anything that
+re-derived a palette per frame would shimmer as colours entered and left the
+scene.
+
+Matching is done in Oklab rather than RGB, because RGB distance produces poor
+perceptual pairings. Near-neutral colours are special-cased onto the
+background-to-foreground ramp — greys have no meaningful hue, and letting them
+snap to whichever accent happens to be nearest tints stonework at random.
 
 ## Auto-pause
 

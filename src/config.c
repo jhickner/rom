@@ -27,7 +27,7 @@ static const char *padnames[16] = {
 
 static const char *hknames[HK_COUNT] = {
     "quit", "pause", "reset", "save_state", "load_state",
-    "slot_next", "slot_prev", "fast_forward", "mute", "stats"
+    "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor"
 };
 
 const char *hotkey_name(int hk) {
@@ -108,11 +108,14 @@ void config_defaults(Config *c) {
     c->hotkey[HK_FAST_FORWARD][0] = KEY_TAB;
     c->hotkey[HK_MUTE][0]         = 'm';
     c->hotkey[HK_STATS][0]        = KEY_F1;
+    c->hotkey[HK_RECOLOR][0]      = KEY_F8;
 
     c->volume = 100;
     c->integer_scale = false;
     c->show_stats = false;      // F1 toggles it on when you want the numbers
     c->pause_on_unfocus = true;
+    c->recolor = RECOLOR_OFF;
+    c->recolor_strength = 1.0;
 }
 
 static char *trim(char *s) {
@@ -175,6 +178,12 @@ int config_load(Config *c, const char *path) {
             else if (strcasecmp(k, "integer_scale") == 0) c->integer_scale = parse_bool(v);
             else if (strcasecmp(k, "show_stats") == 0) c->show_stats = parse_bool(v);
             else if (strcasecmp(k, "pause_on_unfocus") == 0) c->pause_on_unfocus = parse_bool(v);
+            else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
+            else if (strcasecmp(k, "recolor") == 0) {
+                int m = recolor_mode_from_name(v);
+                if (m < 0) fprintf(stderr, "config:%d: unknown recolor mode '%s'\n", lineno, v);
+                else c->recolor = m;
+            }
         }
     }
     fclose(f);
@@ -202,7 +211,7 @@ void config_print(const Config *c, const char *path) {
     static const char *hkdesc[HK_COUNT] = {
         "Quit", "Pause", "Reset", "Save state", "Load state",
         "Next slot", "Previous slot", "Fast-forward (hold)", "Mute",
-        "Toggle status line"
+        "Toggle status line", "Cycle recolor mode"
     };
 
     printf("Game\n");
@@ -229,6 +238,8 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %s\n", "integer_scale", c->integer_scale ? "true" : "false");
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
+    printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
+    printf("  %-22s %.2f\n", "recolor_strength", c->recolor_strength);
 
     if (path) printf("\nEdit %s to rebind.\n", path);
 }
@@ -260,6 +271,9 @@ int config_write_default(const char *path) {
     fprintf(f, "integer_scale    = %s\n", c.integer_scale ? "true" : "false");
     fprintf(f, "show_stats       = %s\n", c.show_stats ? "true" : "false");
     fprintf(f, "pause_on_unfocus = %s\n", c.pause_on_unfocus ? "true" : "false");
+    fprintf(f, "# recolor: off | hue | nearest | duotone | dither\n");
+    fprintf(f, "recolor          = %s\n", recolor_mode_name(c.recolor));
+    fprintf(f, "recolor_strength = %.2f\n", c.recolor_strength);
     fclose(f);
     return 0;
 }

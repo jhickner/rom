@@ -16,6 +16,9 @@ static Renderer   rend;
 static Input      input;
 static AudioCtx  *audio;
 static Term       term;
+static Theme      theme;
+static Recolor    recolor;
+static double     g_recolor_strength = 1.0;
 
 static volatile sig_atomic_t g_quit;
 static volatile sig_atomic_t g_winch = 1;
@@ -197,7 +200,7 @@ static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         g_rgb = nb;
         g_rgb_cap = need;
     }
-    if (video_convert(g_rgb, data, w, h, pitch, g_pixfmt) == 0) return;
+    if (video_convert(g_rgb, data, w, h, pitch, g_pixfmt, &recolor) == 0) return;
     g_frame_w = (int)w;
     g_frame_h = (int)h;
     g_have_frame = true;
@@ -426,6 +429,17 @@ static void do_hotkey(int hk) {
         audio_set_volume(audio, muted ? 0 : cfg.volume);
         osd(muted ? "muted" : "unmuted");
         break;
+    case HK_RECOLOR: {
+        int m = (recolor.mode + 1) % RECOLOR_COUNT;
+        if (recolor_build(&recolor, m, &theme, g_recolor_strength) != 0) {
+            osd("recolor: out of memory");
+        } else {
+            osd("recolor: %s%s", recolor_mode_name(m),
+                theme.from_terminal ? "" : " (built-in palette)");
+            logmsg("recolor mode -> %s", recolor_mode_name(m));
+        }
+        break;
+    }
     case HK_STATS:
         cfg.show_stats = !cfg.show_stats;
         pthread_mutex_lock(&rend.m);
@@ -553,6 +567,9 @@ static void usage(void) {
         "  --inline        play inline at native resolution (default)\n"
         "  --fullscreen    take over the screen and zoom to fit\n"
         "  --scale <n>     integer zoom for inline mode (default 1)\n"
+        "  --recolor <m>   remap colours to the terminal theme:\n"
+        "                  off | hue | nearest | duotone | dither\n"
+        "  --recolor-strength <0..1>   blend against the original (default 1)\n"
         "  --keys          print the current keybinds and exit\n"
         "  --force         run even if the terminal does not ack kitty graphics\n"
         "  --selftest <n>  run <n> frames headlessly and exit (no terminal)\n"
@@ -695,9 +712,10 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
 // --------------------------------------------------------------------- main
 
 int main(int argc, char **argv) {
-    const char *rom = NULL, *core_path = NULL, *shot = NULL;
+    const char *rom = NULL, *core_path = NULL, *shot = NULL, *recolor_arg = NULL;
     bool want_audio = true, force = false, inline_mode = true, keys_only = false;
     int selftest = 0;
+    double strength_arg = -1.0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--core") && i + 1 < argc) core_path = argv[++i];
@@ -707,6 +725,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--inline")) inline_mode = true;
         else if (!strcmp(argv[i], "--fullscreen")) inline_mode = false;
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) g_scale = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--recolor") && i + 1 < argc) recolor_arg = argv[++i];
+        else if (!strcmp(argv[i], "--recolor-strength") && i + 1 < argc)
+            strength_arg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--selftest") && i + 1 < argc) selftest = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
         else if (!strcmp(argv[i], "--keys")) keys_only = true;
@@ -729,6 +750,17 @@ int main(int argc, char **argv) {
     if (!rom) { usage(); return 2; }
     if (slot < 0 || slot >= MAX_STATE_SLOTS) slot = 0;
 
+    int recolor_mode = -1;
+    if (recolor_arg) {
+        recolor_mode = recolor_mode_from_name(recolor_arg);
+        if (recolor_mode < 0) {
+            fprintf(stderr, APP_NAME ": unknown recolor mode '%s'\n"
+                            "  expected: off hue nearest duotone dither\n",
+                    recolor_arg);
+            return 2;
+        }
+    }
+
     char exedir0[512];
     snprintf(exedir0, sizeof exedir0, "%s", argv[0]);
     if (selftest > 0) {
@@ -740,7 +772,17 @@ int main(int argc, char **argv) {
             }
             core_path = cb;
         }
-        return run_selftest(core_path, rom, selftest, shot);
+        // No terminal to ask, so the built-in palette stands in.
+        if (recolor_mode > RECOLOR_OFF) {
+            theme_fallback(&theme);
+            double s = strength_arg >= 0.0 ? strength_arg : 1.0;
+            recolor_build(&recolor, recolor_mode, &theme, s);
+            printf("recolor: %s (built-in palette, strength %.2f)\n",
+                   recolor_mode_name(recolor_mode), s);
+        }
+        int rc = run_selftest(core_path, rom, selftest, shot);
+        recolor_free(&recolor);
+        return rc;
     }
 
     if (!isatty(STDOUT_FILENO)) {
@@ -756,6 +798,9 @@ int main(int argc, char **argv) {
     config_defaults(&cfg);
     if (!file_exists(cfgpath)) config_write_default(cfgpath);
     config_load(&cfg, cfgpath);
+    if (recolor_mode >= 0) cfg.recolor = recolor_mode;
+    if (strength_arg >= 0.0) cfg.recolor_strength = strength_arg;
+    g_recolor_strength = cfg.recolor_strength;
 
     char exedir[512];
     snprintf(exedir, sizeof exedir, "%s", argv[0]);
@@ -876,6 +921,23 @@ int main(int argc, char **argv) {
 
     int kbd = input_init(&input, ttyfd);
 
+    // Grouped with the other startup probes: these queries have read windows
+    // that would swallow keystrokes if run once the game is underway.
+    theme_fallback(&theme);
+    if (cfg.recolor != RECOLOR_OFF) {
+        theme_query(&theme, ttyfd);
+        logmsg("theme: %s, bg #%02x%02x%02x fg #%02x%02x%02x",
+               theme.from_terminal ? "from terminal" : "built-in fallback",
+               theme.bg[0], theme.bg[1], theme.bg[2],
+               theme.fg[0], theme.fg[1], theme.fg[2]);
+        double t0 = now_sec();
+        if (recolor_build(&recolor, cfg.recolor, &theme, cfg.recolor_strength) != 0)
+            logmsg("recolor: failed to build LUT");
+        else
+            logmsg("recolor: %s LUT built in %.1f ms",
+                   recolor_mode_name(cfg.recolor), (now_sec() - t0) * 1000.0);
+    }
+
     if (renderer_start(&rend, ttyfd) != 0) {
         term_leave(&term);
         core_unload(&core);
@@ -993,6 +1055,7 @@ int main(int argc, char **argv) {
     audio_stop(audio);
     core_unload(&core);
 
+    recolor_free(&recolor);
     free(g_rgb);
     free(g_scaled);
     free(g_zoom);
