@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
@@ -535,21 +536,21 @@ static void on_fatal(int sig) {
 static const struct {
     const char *exts;      // space separated
     const char *sys;       // slug for [options.<sys>] sections
-    const char *dylib;
+    const char *core;
     const char *repo;      // github path
     const char *target;    // verified top-level make target, NULL if untested
 } CORES[] = {
-    { "sfc smc fig", "snes", "snes9x_libretro.dylib", "libretro/snes9x",
+    { "sfc smc fig", "snes", "snes9x_libretro" CORE_EXT, "libretro/snes9x",
       "core-snes" },
-    { "gba", "gba", "mgba_libretro.dylib", "libretro/mgba",
+    { "gba", "gba", "mgba_libretro" CORE_EXT, "libretro/mgba",
       "core-gba" },
-    { "nes",        "nes",     "fceumm_libretro.dylib",
+    { "nes",        "nes",     "fceumm_libretro" CORE_EXT,
       "libretro/libretro-fceumm",          NULL },
-    { "gb gbc",     "gb",      "gambatte_libretro.dylib",
+    { "gb gbc",     "gb",      "gambatte_libretro" CORE_EXT,
       "libretro/gambatte-libretro",        NULL },
-    { "md gen smd", "genesis", "genesis_plus_gx_libretro.dylib",
+    { "md gen smd", "genesis", "genesis_plus_gx_libretro" CORE_EXT,
       "libretro/Genesis-Plus-GX",          NULL },
-    { "pce",        "pce",     "mednafen_pce_fast_libretro.dylib",
+    { "pce",        "pce",     "mednafen_pce_fast_libretro" CORE_EXT,
       "libretro/beetle-pce-fast-libretro", NULL },
 };
 #define NCORES ((int)(sizeof CORES / sizeof CORES[0]))
@@ -579,7 +580,7 @@ static const char *system_for_ext(const char *rom) {
 
 static const char *core_for_ext(const char *rom) {
     int i = core_entry_for(rom);
-    return i < 0 ? NULL : CORES[i].dylib;
+    return i < 0 ? NULL : CORES[i].core;
 }
 
 static bool file_exists(const char *p) {
@@ -610,10 +611,10 @@ static void print_missing_core(const char *rom) {
     int i = core_entry_for(rom);
     fprintf(stderr, APP_NAME ": no core found for %s\n", rom);
     if (i < 0) {
-        fprintf(stderr, "  unrecognised extension - pass --core <path.dylib>\n");
+        fprintf(stderr, "  unrecognised extension - pass --core <path>\n");
         return;
     }
-    fprintf(stderr, "  needs:    %s\n", CORES[i].dylib);
+    fprintf(stderr, "  needs:    %s\n", CORES[i].core);
     fprintf(stderr, "  searched: %s/cores, ./cores, <exedir>/../cores\n\n",
             config_dir());
     if (CORES[i].target) {
@@ -623,10 +624,10 @@ static void print_missing_core(const char *rom) {
     } else {
         fprintf(stderr, "  build it from https://github.com/%s\n"
                         "  (see that repo for its libretro target), then copy\n"
-                        "  %s into cores/\n", CORES[i].repo, CORES[i].dylib);
+                        "  %s into cores/\n", CORES[i].repo, CORES[i].core);
     }
     fprintf(stderr, "\n  or point at one you already have:\n"
-                    "    " APP_NAME " --core <path.dylib> \"%s\"\n", rom);
+                    "    " APP_NAME " --core <path> \"%s\"\n", rom);
 }
 
 static void usage(void) {

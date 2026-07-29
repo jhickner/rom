@@ -2,9 +2,9 @@
 
 Play ROMs directly in your terminal.
 
-`rom` is a small libretro frontend for macOS. It renders native pixels with the
-kitty graphics protocol, supports real key-release events, save states, audio,
-fast-forward, and live terminal-theme recoloring.
+`rom` is a small libretro frontend for macOS and Linux. It renders native
+pixels with the kitty graphics protocol, supports real key-release events,
+save states, audio, fast-forward, and live terminal-theme recoloring.
 
 ![Metroid Fusion running inline in the terminal with hue recoloring](docs/screenshots/metroid-fusion-hue.png)
 
@@ -13,11 +13,24 @@ you are legally entitled to use.
 
 ## Quick start
 
-You need macOS, the Xcode command-line tools, and
-[Ghostty](https://ghostty.org/) or [kitty](https://sw.kovidgoyal.net/kitty/).
+You need [Ghostty](https://ghostty.org/) or
+[kitty](https://sw.kovidgoyal.net/kitty/) and a C compiler.
+
+On macOS:
 
 ```sh
 xcode-select --install
+```
+
+On Ubuntu or Debian:
+
+```sh
+sudo apt install build-essential libasound2-dev
+```
+
+Then:
+
+```sh
 git clone https://github.com/jhickner/rom
 cd rom
 make
@@ -38,8 +51,8 @@ make install PREFIX="$HOME/.local"
 
 ## Cores
 
-`rom` uses libretro `.dylib` cores. These targets build and install the tested
-cores:
+`rom` uses libretro cores: `.dylib` on macOS and `.so` on Linux. These targets
+build and install the tested cores:
 
 ```sh
 make core-snes
@@ -59,12 +72,12 @@ Use `--core <path>` to select one directly.
 
 | ROM | Core |
 |---|---|
-| `.sfc` `.smc` `.fig` | `snes9x_libretro.dylib` |
-| `.nes` | `fceumm_libretro.dylib` |
-| `.gb` `.gbc` | `gambatte_libretro.dylib` |
-| `.gba` | `mgba_libretro.dylib` |
-| `.md` `.gen` `.smd` | `genesis_plus_gx_libretro.dylib` |
-| `.pce` | `mednafen_pce_fast_libretro.dylib` |
+| `.sfc` `.smc` `.fig` | `snes9x_libretro` |
+| `.nes` | `fceumm_libretro` |
+| `.gb` `.gbc` | `gambatte_libretro` |
+| `.gba` | `mgba_libretro` |
+| `.md` `.gen` `.smd` | `genesis_plus_gx_libretro` |
+| `.pce` | `mednafen_pce_fast_libretro` |
 
 ## Usage
 
@@ -155,7 +168,7 @@ are written atomically and SRAM is autosaved every five seconds when changed.
 
 ## Limitations
 
-- macOS only (CoreAudio)
+- macOS (CoreAudio) or Linux (ALSA)
 - Ghostty or kitty required
 - Software-rendered cores only; no GL or Vulkan cores
 - Player 1 keyboard input only

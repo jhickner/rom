@@ -5,6 +5,7 @@
 #include <string.h>
 #include "rom.h"
 
+// CoreAudio output backend for macOS.
 #define RING_FRAMES 32768u          // power of two; ~1s at 32kHz
 #define RING_MASK   (RING_FRAMES - 1u)
 
@@ -41,7 +42,9 @@ static OSStatus render_cb(void *ref, AudioUnitRenderActionFlags *flags,
         out[i * 2] = 0;
         out[i * 2 + 1] = 0;
     }
-    atomic_store_explicit(&a->rd, rd + n, memory_order_release);
+    unsigned next = rd + n;
+    atomic_compare_exchange_strong_explicit(
+        &a->rd, &rd, next, memory_order_release, memory_order_relaxed);
     return noErr;
 }
 

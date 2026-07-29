@@ -8,6 +8,13 @@
 #include "libretro.h"
 
 #define APP_NAME "rom"            // executable and config-directory name
+#if defined(__APPLE__)
+#define CORE_EXT ".dylib"
+#elif defined(__linux__)
+#define CORE_EXT ".so"
+#else
+#error "unsupported platform"
+#endif
 #define MAX_STATE_SLOTS 10
 #define OSD_MSG_MAX 128
 #define MAX_HOTKEY_KEYS 3        // alternates per action, e.g. Ctrl+c / Ctrl+q
