@@ -2,55 +2,22 @@
 
 Play ROMs directly in your terminal.
 
-`rom` is a small libretro frontend for macOS. It renders native pixels through
-the kitty graphics protocol, handles real key-release events through the kitty
-keyboard protocol, and can recolour games to match your terminal theme.
+`rom` is a small libretro frontend for macOS. It renders native pixels with the
+kitty graphics protocol, supports real key-release events, save states, audio,
+fast-forward, and live terminal-theme recoloring.
 
-It is built and tested against SNES (snes9x), but the frontend is not
-SNES-specific: geometry, pixel format, framerate, aspect ratio, and sample rate
-all come from the selected core at runtime.
+![Metroid Fusion running inline in the terminal with hue recoloring](docs/screenshots/metroid-fusion-hue.png)
 
 `rom` does not include games, BIOS files, or emulator cores. Only run software
 you are legally entitled to use.
 
-## Your terminal theme, inside the game
-
-Your terminal palette is not just decoration around the game — `rom` makes it
-part of the renderer. At startup it reads the terminal's ANSI colors plus its
-foreground and background, matches colors perceptually in Oklab, and builds a
-65,536-entry lookup table covering every RGB565 color. The result follows your
-actual theme with no per-frame palette analysis, no color shimmer, and
-negligible runtime cost.
-
-These are literal terminal captures, not exported framebuffers:
-
-**Metroid Fusion — `hue`**
-
-![Metroid Fusion running inline in the terminal with hue recoloring](docs/screenshots/metroid-fusion-hue.png)
-
-**Advance Wars — `dither`**
-
-![Advance Wars running inline in the terminal with terminal-palette dithering](docs/screenshots/advance-wars-dither.png)
-
-**Castlevania: Aria of Sorrow — `duotone`**
-
-![Castlevania Aria of Sorrow running inline in the terminal with duotone recoloring](docs/screenshots/castlevania-aria-of-sorrow-duotone.png)
-
-`hue` keeps the game's shading while adopting the nearest theme hues.
-`nearest` goes all-in on the terminal's 16-color identity, `duotone` maps the
-scene across the background-to-foreground ramp, and `dither` recovers shades
-between palette entries. Press **F8** while playing to cycle through them
-instantly, or blend any mode with the original using `--recolor-strength`.
-
 ## Quick start
 
-You need:
-
-- macOS and the Xcode command-line tools (`xcode-select --install`)
-- [Ghostty](https://ghostty.org/) or [kitty](https://sw.kovidgoyal.net/kitty/)
-- a ROM and a matching libretro core
+You need macOS, the Xcode command-line tools, and
+[Ghostty](https://ghostty.org/) or [kitty](https://sw.kovidgoyal.net/kitty/).
 
 ```sh
+xcode-select --install
 git clone https://github.com/jhickner/rom
 cd rom
 make
@@ -58,14 +25,12 @@ make core-snes
 ./rom "path/to/game.sfc"
 ```
 
-The example builds the app and the SNES core. For a Game Boy Advance ROM, use
-`make core-gba` instead. If a core is missing, `rom` identifies the required
-file and prints the exact build command or upstream source repository.
+For Game Boy Advance, use `make core-gba` and pass a `.gba` file.
 
-Run `rom` in a bare Ghostty or kitty window, not inside tmux. See
-[Terminal compatibility](#terminal-compatibility) for why.
+Run `rom` directly in Ghostty or kitty, not inside tmux. tmux interferes with
+the graphics and keyboard protocols.
 
-To put the executable on your path after building:
+Optional installation:
 
 ```sh
 make install PREFIX="$HOME/.local"
@@ -73,32 +38,26 @@ make install PREFIX="$HOME/.local"
 
 ## Cores
 
-Cores are plain libretro `.dylib` files. The verified build targets clone the
-upstream source under `vendor/`, compile it for your Mac, and copy the result
-into `cores/`:
+`rom` uses libretro `.dylib` cores. These targets build and install the tested
+cores:
 
 ```sh
 make core-snes
 make core-gba
 ```
 
-Set `JOBS` to control build parallelism, for example `make core-snes JOBS=8`.
-Running a target again rebuilds the existing checkout without deleting local
-changes.
+If a core is missing, run the ROM anyway. `rom` prints the required filename
+and either an exact build command or the upstream repository.
 
-For other systems, running the ROM once prints the required core filename and
-the upstream repository containing its libretro build. You can also use a core
-downloaded by RetroArch:
+Cores are searched in:
 
-```sh
-./rom --core "$HOME/Library/Application Support/RetroArch/cores/gambatte_libretro.dylib" game.gbc
-```
+1. `~/.config/rom/cores/`
+2. `./cores/`
+3. `<executable>/../cores/`
 
-`rom` picks a core from the ROM extension and searches, in order:
-`~/.config/rom/cores/`, `./cores/`, then `<exedir>/../cores/`. Override with
-`--core <path>`.
+Use `--core <path>` to select one directly.
 
-| Extension | Core |
+| ROM | Core |
 |---|---|
 | `.sfc` `.smc` `.fig` | `snes9x_libretro.dylib` |
 | `.nes` | `fceumm_libretro.dylib` |
@@ -107,273 +66,99 @@ downloaded by RetroArch:
 | `.md` `.gen` `.smd` | `genesis_plus_gx_libretro.dylib` |
 | `.pce` | `mednafen_pce_fast_libretro.dylib` |
 
-## Terminal compatibility
-
-**Run it in a bare Ghostty or kitty window, not inside tmux.** tmux's graphics
-passthrough is slow and unreliable for animation, and it interferes with the
-keyboard protocol.
-
-On startup `rom` queries the terminal for the graphics protocol. If there is no
-answer it restores the terminal and exits with an explanation rather than
-filling the screen with escape sequences it cannot render. tmux swallows the
-reply even when the outer terminal supports the protocol, which is why running
-under tmux trips this. Override with `--force` if you know better.
-
-The keyboard protocol is a warning, not a hard stop: without key-release events
-held keys never lift, which makes games unplayable but leaves Escape working.
-
-### Display modes
-
-**Inline (default).** The game plays in the normal terminal flow, at the
-platform's native resolution — one emulated pixel to one terminal pixel, no
-zooming. `rom` scrolls up just enough room at the cursor, draws there, and puts
-the status line directly beneath. Your scrollback is never cleared, and on exit
-the final frame stays on screen with the prompt below it, like any other
-command's output.
-
-Because the frame is transmitted with no `c=`/`r=` fields, the terminal draws it
-at exactly its pixel size instead of stretching it to a cell rect. For SNES that
-is 256×224 in 32×14 cells.
-
-`--scale N` zooms by whole multiples (2, 3, …). Zooming is done in the frontend
-with nearest-neighbour sampling so pixel art stays sharp rather than being
-smoothed by the terminal's scaler. If the requested zoom does not fit the
-window, `rom` steps it down to the largest one that does.
-
-**Fullscreen (`--fullscreen`).** The original behaviour: alt screen, image
-centred and zoomed to fill the window at the core's aspect ratio, status line
-pinned to the bottom row. Restores your screen on exit.
-
-### Options
-
-| Flag | Effect |
-|---|---|
-| `--core <path>` | Use a specific core |
-| `--slot <n>` | Initial save-state slot (0–9) |
-| `--no-audio` | Disable audio output |
-| `--inline` | Play inline at native resolution (default) |
-| `--fullscreen` | Take over the screen and zoom to fit |
-| `--scale <n>` | Integer zoom for inline mode, 1–8 (overrides the config) |
-| `--recolor <mode>` | `off` \| `hue` \| `nearest` \| `duotone` \| `dither` |
-| `--recolor-strength <0..1>` | Blend the recolour against the original (default 1) |
-| `--keys` | Print the current keybinds and exit |
-| `--force` | Run even if the terminal does not ack kitty graphics |
-| `--selftest <n>` | Run `n` frames headlessly, check states and SRAM, exit |
-| `--shot <file>` | With `--selftest`, write the final frame as a BMP |
-
-`--selftest` needs no terminal, which makes it useful for verifying a new core:
+## Usage
 
 ```sh
-./rom --selftest 900 --shot title.bmp game.sfc
+./rom [options] <rom>
 ```
 
-## Default keys
+| Option | Description |
+|---|---|
+| `--core <path>` | Use a specific core |
+| `--fullscreen` | Fill the terminal window |
+| `--scale <n>` | Integer zoom in inline mode, 1–8 |
+| `--slot <n>` | Initial save-state slot, 0–9 |
+| `--no-audio` | Disable audio |
+| `--recolor <mode>` | `off`, `hue`, `nearest`, `duotone`, or `dither` |
+| `--recolor-strength <0..1>` | Blend recoloring with the original |
+| `--keys` | Print current key bindings |
+| `--selftest <n>` | Run `n` frames without a terminal |
+| `--shot <file>` | Save the final self-test frame as BMP |
+| `--force` | Skip terminal graphics detection |
 
-Game (SNES layout):
+Inline mode is the default. It leaves scrollback intact and keeps the final
+frame on screen when the game exits.
 
-| Key | Button |
+### Controls
+
+| Key | Action |
 |---|---|
 | Arrows | D-pad |
 | `z` / `x` | B / A |
 | `a` / `s` | Y / X |
 | `q` / `w` | L / R |
-| Enter | Start |
-| Right Shift | Select |
-
-Hotkeys:
-
-| Key | Action |
-|---|---|
-| Ctrl+C *or* Ctrl+Q | Quit |
+| Enter / Right Shift | Start / Select |
+| Ctrl+C or Ctrl+Q | Quit |
 | `p` | Pause |
-| F1 | Toggle status line |
 | F2 / F3 | Save / load state |
 | F6 / F7 | Previous / next slot |
 | F5 | Reset |
-| Tab (hold) | Fast-forward |
-| F8 | Cycle recolour mode |
-| `-` / `=` (or `+`) | Volume down / up, in steps of 10 |
+| Tab | Fast-forward while held |
+| F8 | Cycle recolor mode |
+| `-` / `=` | Volume down / up |
 | `m` | Mute |
 
-Volume up and down are bound to both the shifted and unshifted spellings of
-those keys. The kitty protocol reports the *unshifted* key, so `shift`+`=`
-arrives as `=`; binding both means either works whatever your layout does.
+## Terminal colors
 
-Quit deliberately takes a modifier — Escape is far too easy to hit by reflex
-mid-game, and it is unbound by default.
+`rom` reads the terminal's ANSI palette, foreground, and background at
+startup. Colors are matched perceptually in Oklab through a prebuilt lookup
+table, so the result is stable and fast.
 
-`rom --keys` prints the bindings currently in effect, including any you have
-rebound, without needing a ROM.
-
-## Recolouring to the terminal theme
-
-`--recolor <mode>` remaps the game's colours to your terminal's palette, which
-`rom` reads at startup via the OSC 4 / 10 / 11 queries (Ghostty and kitty both
-answer). If the terminal does not reply, a built-in Tango palette stands in.
-
-| Mode | Effect |
+| Mode | Result |
 |---|---|
-| `off` | No remapping (default) |
-| `hue` | Keep each pixel's lightness and saturation, adopt the nearest theme hue. Structure and shading survive intact — the recommended starting point |
-| `nearest` | Hard-map every pixel to its closest theme colour. Strongest "terminal" look, flattens gradients |
-| `duotone` | Map lightness across the background-to-foreground ramp |
-| `dither` | Ordered 4×4 dither between the two closest theme colours, recovering tones a hard map would flatten |
+| `hue` | Keeps shading while adopting theme hues |
+| `nearest` | Maps directly to the terminal palette |
+| `duotone` | Uses the background-to-foreground ramp |
+| `dither` | Mixes nearby palette colors to recover shades |
 
-`--recolor-strength <0..1>` blends against the original, so you can dial the
-effect down. **F8 cycles modes at runtime**, which is the fastest way to find a
-look you like.
+Start with `--recolor hue`. Press F8 to compare modes while playing.
 
-Set it permanently in the config:
+## Config and saves
+
+The config is created at `~/.config/rom/config`. Edit it to change keys,
+volume, scale, recoloring, or focus behavior.
 
 ```ini
 [options]
+scale            = 2
 recolor          = hue
 recolor_strength = 1.00
-```
-
-### How it works
-
-Cores hand out finished RGB frames, not palettes — snes9x exports SRAM, WRAM
-and VRAM through libretro, but not CGRAM. That turns out not to matter: by the
-time a frame exists it has already been through colour math, windowing, mosaic
-and brightness, so the palette would not describe the pixels anyway. Working on
-the output is both simpler and core-agnostic.
-
-Since snes9x emits RGB565, a 65,536-entry table covers **every possible input
-colour exactly** — no approximation and no per-frame colour analysis. Mapping
-happens once when the table is built (9 ms), and per-pixel cost drops to a
-single indexed load. Measured overhead is a few percent of total frame time,
-which at ~45× realtime is irrelevant.
-
-A static table also means the result is temporally stable. Anything that
-re-derived a palette per frame would shimmer as colours entered and left the
-scene.
-
-Matching is done in Oklab rather than RGB, because RGB distance produces poor
-perceptual pairings. Near-neutral colours are special-cased onto the
-background-to-foreground ramp — greys have no meaningful hue, and letting them
-snap to whichever accent happens to be nearest tints stonework at random.
-
-## Auto-pause
-
-`rom` enables focus reporting (DECSET 1004) and pauses when the terminal window
-or pane loses focus, resuming when it comes back. Manual pause is tracked
-separately, so refocusing will not un-pause a game you paused yourself.
-
-Losing focus also drops every held key. The release event for anything held at
-that moment would never arrive — you would come back to Link still walking into
-a wall.
-
-Terminals that do not implement focus reporting simply never send the events and
-the feature stays inert. Under tmux it requires `set -g focus-events on`.
-
-Disable with `pause_on_unfocus = false` in the config.
-
-## Config
-
-Written to `~/.config/rom/config` on first run; edit and restart. Key names are
-single characters or one of: `Up Down Left Right Home End Insert Delete PageUp
-PageDown F1`–`F12` `Escape Tab Enter Backspace Space LShift RShift LCtrl RCtrl
-LAlt RAlt`.
-
-Hotkeys accept the `Ctrl+` and `Alt+` prefixes, and a comma-separated list of
-alternates:
-
-```ini
-[hotkeys]
-quit = Ctrl+c, Ctrl+q
-
-[options]
-volume           = 100
-scale            = 1       # inline-mode integer zoom, 1-8
-integer_scale    = false   # snap the image to whole multiples of native size
-show_stats       = false   # F1 toggles the status line at runtime
-pause_on_unfocus = true    # pause when the terminal loses focus
-```
-
-Modifiers apply to hotkeys only. Game buttons ignore them, so holding Ctrl will
-not stop your D-pad from working.
-
-### Per-platform overrides
-
-Suffix any section with a system name and it applies on top of the unsuffixed
-one. Useful because platforms want genuinely different settings — a Game Boy
-frame is 160×144 and wants far more zoom than a SNES, and it has no X/Y/L/R
-buttons to bind:
-
-```ini
-[options]
-scale = 2
+pause_on_unfocus = true
 
 [options.gb]
 scale = 4
-
-[pad.gb]
-a = n
 ```
 
-Systems: `snes` `nes` `gb` `gba` `genesis` `pce`, chosen from the ROM
-extension. Overrides are applied in a second pass, so they win regardless of
-where they sit in the file, and they only touch the keys they name — everything
-else falls through from the general section.
-
-`rom --keys <rom>` prints the bindings and options that ROM's platform will
-actually use, overrides included.
-
-## Files
+Sections may be suffixed with `snes`, `nes`, `gb`, `gba`, `genesis`, or `pce`
+for system-specific overrides. Run `rom --keys <rom>` to see the effective
+settings.
 
 | Path | Contents |
 |---|---|
-| `~/.config/rom/config` | Keybinds and options |
-| `~/.config/rom/saves/<rom>.srm` | Battery SRAM, autosaved every 5s when dirty and on exit |
-| `~/.config/rom/states/<rom>.state<n>` | Save states, slots 0–9 |
-| `~/.config/rom/rom.log` | Frontend and core logging |
+| `~/.config/rom/config` | Settings and bindings |
+| `~/.config/rom/saves/` | Battery saves |
+| `~/.config/rom/states/` | Save states |
+| `~/.config/rom/rom.log` | Frontend and core log |
 
-Saves and states are written to a temp file and renamed, so an interrupted
-write can't destroy a good save.
-
-## Design notes
-
-**Rendering runs on its own thread** behind a three-buffer mailbox. The
-emulator thread always writes into a buffer nobody is reading, so a terminal
-that can't keep up drops frames instead of stalling emulation and starving
-audio. F1 shows a status line reporting emulated fps, displayed fps, dropped
-frames per half-second, and audio latency; it is hidden by default and centred
-under the image when shown.
-
-**Bandwidth is bounded by output size, not console resolution.** Inline mode at
-1× transmits exactly the core's native frame, which is the cheapest it can be —
-about 14 MB/s at SNES resolution and 60fps. `--scale N` multiplies that by N²,
-so 2× costs roughly 55 MB/s. Fullscreen sends native pixels and lets the GPU
-scale via the `c=`/`r=` cell rect, so upscaling there is free; only when the
-core outputs more pixels than the window can show (PSX hi-res, hi-res SNES
-modes) is the frame box-downscaled first.
-
-**Timing is paced by audio consumption**, holding roughly three frames of
-buffer, so playback tracks real time without drift. With `--no-audio` it falls
-back to a wall clock.
-
-**Core stdout/stderr are redirected to the log** before the core is loaded, so
-chatter during ROM load (snes9x prints its memory map) never reaches the
-screen. The terminal is held on a private dup'd fd, and a dup of the original
-stderr is kept so real startup errors still reach you.
-
-**Teardown is defensive.** SIGINT/SIGTERM exit cleanly; SIGSEGV/SIGBUS/SIGABRT
-restore the terminal and re-raise, so a crash never leaves a wedged terminal.
-
-## Benchmark
-
-`tools/kittybench.c` measures sustained kitty-graphics throughput across
-platform resolutions, to see where a terminal tops out:
-
-```sh
-make kittybench && ./kittybench 400
-```
+Games pause when the terminal loses focus and resume when it returns. Saves
+are written atomically and SRAM is autosaved every five seconds when changed.
 
 ## Limitations
 
-- macOS only (CoreAudio).
-- Software-rendered cores only. Cores requesting a GL/Vulkan context
-  (N64, Dreamcast, hardware-renderer PSX) are not supported.
-- Player 1 only; no gamepad input.
-- Core options use their built-in defaults; there is no options UI.
+- macOS only (CoreAudio)
+- Ghostty or kitty required
+- Software-rendered cores only; no GL or Vulkan cores
+- Player 1 keyboard input only
+- Core options use their defaults
+
+Licensed under the [MIT License](LICENSE).
