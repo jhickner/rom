@@ -27,7 +27,8 @@ static const char *padnames[16] = {
 
 static const char *hknames[HK_COUNT] = {
     "quit", "pause", "reset", "save_state", "load_state",
-    "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor"
+    "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor",
+    "volume_up", "volume_down"
 };
 
 const char *hotkey_name(int hk) {
@@ -109,6 +110,12 @@ void config_defaults(Config *c) {
     c->hotkey[HK_MUTE][0]         = 'm';
     c->hotkey[HK_STATS][0]        = KEY_F1;
     c->hotkey[HK_RECOLOR][0]      = KEY_F8;
+    // The kitty protocol reports the unshifted key, so shift+'=' arrives as
+    // '='. Bind both so the shifted and unshifted spellings each work.
+    c->hotkey[HK_VOL_UP][0]       = '=';
+    c->hotkey[HK_VOL_UP][1]       = '+';
+    c->hotkey[HK_VOL_DOWN][0]     = '-';
+    c->hotkey[HK_VOL_DOWN][1]     = '_';
 
     c->volume = 100;
     c->integer_scale = false;
@@ -116,6 +123,7 @@ void config_defaults(Config *c) {
     c->pause_on_unfocus = true;
     c->recolor = RECOLOR_OFF;
     c->recolor_strength = 1.0;
+    c->scale = 1;
 }
 
 static char *trim(char *s) {
@@ -130,10 +138,16 @@ static bool parse_bool(const char *v) {
            strcasecmp(v, "1") == 0 || strcasecmp(v, "on") == 0;
 }
 
-int config_load(Config *c, const char *path) {
+// One pass over the file. `want_suffixed` selects which half of the config is
+// applied: the plain sections, or only those tagged for `system`. Running the
+// plain pass first means a [options.gb] block overrides [options] no matter
+// which order they appear in the file.
+static int config_pass(Config *c, const char *path, const char *system,
+                       bool want_suffixed) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     char line[512], section[64] = "";
+    bool skip = true;
     int lineno = 0;
     while (fgets(line, sizeof line, f)) {
         lineno++;
@@ -141,9 +155,19 @@ int config_load(Config *c, const char *path) {
         if (!*s || *s == '#' || *s == ';') continue;
         if (*s == '[') {
             char *end = strchr(s, ']');
-            if (end) { *end = 0; snprintf(section, sizeof section, "%s", s + 1); }
+            if (!end) continue;
+            *end = 0;
+            snprintf(section, sizeof section, "%s", s + 1);
+            char *dot = strchr(section, '.');
+            bool suffixed = dot != NULL;
+            skip = (suffixed != want_suffixed);
+            if (suffixed) {
+                *dot = 0;
+                if (!system || strcasecmp(dot + 1, system) != 0) skip = true;
+            }
             continue;
         }
+        if (skip) continue;
         char *eq = strchr(s, '=');
         if (!eq) continue;
         *eq = 0;
@@ -179,6 +203,7 @@ int config_load(Config *c, const char *path) {
             else if (strcasecmp(k, "show_stats") == 0) c->show_stats = parse_bool(v);
             else if (strcasecmp(k, "pause_on_unfocus") == 0) c->pause_on_unfocus = parse_bool(v);
             else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
+            else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
             else if (strcasecmp(k, "recolor") == 0) {
                 int m = recolor_mode_from_name(v);
                 if (m < 0) fprintf(stderr, "config:%d: unknown recolor mode '%s'\n", lineno, v);
@@ -187,8 +212,19 @@ int config_load(Config *c, const char *path) {
         }
     }
     fclose(f);
+    return 0;
+}
+
+int config_load(Config *c, const char *path, const char *system) {
+    if (config_pass(c, path, NULL, false) != 0) return -1;
+    if (system && *system) config_pass(c, path, system, true);
+
     if (c->volume < 0) c->volume = 0;
     if (c->volume > 100) c->volume = 100;
+    if (c->scale < 1) c->scale = 1;
+    if (c->scale > 8) c->scale = 8;
+    if (c->recolor_strength < 0.0) c->recolor_strength = 0.0;
+    if (c->recolor_strength > 1.0) c->recolor_strength = 1.0;
     return 0;
 }
 
@@ -211,7 +247,7 @@ void config_print(const Config *c, const char *path) {
     static const char *hkdesc[HK_COUNT] = {
         "Quit", "Pause", "Reset", "Save state", "Load state",
         "Next slot", "Previous slot", "Fast-forward (hold)", "Mute",
-        "Toggle status line", "Cycle recolor mode"
+        "Toggle status line", "Cycle recolor mode", "Volume up", "Volume down"
     };
 
     printf("Game\n");
@@ -235,6 +271,7 @@ void config_print(const Config *c, const char *path) {
 
     printf("\nOptions\n");
     printf("  %-22s %d\n", "volume", c->volume);
+    printf("  %-22s %d\n", "scale", c->scale);
     printf("  %-22s %s\n", "integer_scale", c->integer_scale ? "true" : "false");
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
@@ -271,9 +308,21 @@ int config_write_default(const char *path) {
     fprintf(f, "integer_scale    = %s\n", c.integer_scale ? "true" : "false");
     fprintf(f, "show_stats       = %s\n", c.show_stats ? "true" : "false");
     fprintf(f, "pause_on_unfocus = %s\n", c.pause_on_unfocus ? "true" : "false");
+    fprintf(f, "scale            = %d          # inline-mode integer zoom, 1-8\n", c.scale);
     fprintf(f, "# recolor: off | hue | nearest | duotone | dither\n");
     fprintf(f, "recolor          = %s\n", recolor_mode_name(c.recolor));
     fprintf(f, "recolor_strength = %.2f\n", c.recolor_strength);
+    fprintf(f,
+        "\n"
+        "# Per-platform overrides: suffix any section with a system name.\n"
+        "# Systems: snes nes gb gba genesis pce\n"
+        "# These are applied on top of the sections above, whatever the order.\n"
+        "#\n"
+        "# [options.gb]\n"
+        "# scale = 4        # Game Boy is only 160x144, so zoom it further\n"
+        "#\n"
+        "# [pad.gb]\n"
+        "# a = x            # the Game Boy has no X/Y/L/R to bind\n");
     fclose(f);
     return 0;
 }

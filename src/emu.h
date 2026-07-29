@@ -47,7 +47,7 @@ uint32_t key_from_name(const char *name);
 enum {
     HK_QUIT, HK_PAUSE, HK_RESET, HK_SAVE_STATE, HK_LOAD_STATE,
     HK_SLOT_NEXT, HK_SLOT_PREV, HK_FAST_FORWARD, HK_MUTE, HK_STATS,
-    HK_RECOLOR,
+    HK_RECOLOR, HK_VOL_UP, HK_VOL_DOWN,
     HK_COUNT
 };
 
@@ -60,10 +60,13 @@ typedef struct {
     bool     pause_on_unfocus; // pause when the terminal loses focus
     int      recolor;          // RECOLOR_*
     double   recolor_strength; // 0..1 blend against the original colours
+    int      scale;            // default integer zoom for inline mode
 } Config;
 
 void config_defaults(Config *c);
-int  config_load(Config *c, const char *path);
+// `system` is a slug like "snes" or "gb"; sections suffixed with it (e.g.
+// [options.gb]) are applied on top of the unsuffixed ones. NULL for none.
+int  config_load(Config *c, const char *path, const char *system);
 int  config_write_default(const char *path);
 void config_print(const Config *c, const char *path);
 const char *hotkey_name(int hk);

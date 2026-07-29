@@ -429,6 +429,17 @@ static void do_hotkey(int hk) {
         audio_set_volume(audio, muted ? 0 : cfg.volume);
         osd(muted ? "muted" : "unmuted");
         break;
+    case HK_VOL_UP:
+    case HK_VOL_DOWN: {
+        cfg.volume += (hk == HK_VOL_UP) ? 10 : -10;
+        if (cfg.volume < 0) cfg.volume = 0;
+        if (cfg.volume > 100) cfg.volume = 100;
+        muted = false;              // reaching for the volume means you want to hear it
+        audio_set_volume(audio, cfg.volume);
+        osd("volume %d%%", cfg.volume);
+        logmsg("volume -> %d%%", cfg.volume);
+        break;
+    }
     case HK_RECOLOR: {
         int m = (recolor.mode + 1) % RECOLOR_COUNT;
         if (recolor_build(&recolor, m, &theme, g_recolor_strength) != 0) {
@@ -519,6 +530,22 @@ static void on_fatal(int sig) {
 
 // ------------------------------------------------------------- core lookup
 
+// Slug used to select per-platform config sections, e.g. [options.gb].
+static const char *system_for_ext(const char *rom) {
+    const char *dot = rom ? strrchr(rom, '.') : NULL;
+    if (!dot) return "";
+    dot++;
+    if (!strcasecmp(dot, "sfc") || !strcasecmp(dot, "smc") || !strcasecmp(dot, "fig"))
+        return "snes";
+    if (!strcasecmp(dot, "nes")) return "nes";
+    if (!strcasecmp(dot, "gb") || !strcasecmp(dot, "gbc")) return "gb";
+    if (!strcasecmp(dot, "gba")) return "gba";
+    if (!strcasecmp(dot, "md") || !strcasecmp(dot, "gen") || !strcasecmp(dot, "smd"))
+        return "genesis";
+    if (!strcasecmp(dot, "pce")) return "pce";
+    return "";
+}
+
 static const char *core_for_ext(const char *rom) {
     const char *dot = strrchr(rom, '.');
     if (!dot) return NULL;
@@ -566,11 +593,12 @@ static void usage(void) {
         "  --no-audio      disable audio output\n"
         "  --inline        play inline at native resolution (default)\n"
         "  --fullscreen    take over the screen and zoom to fit\n"
-        "  --scale <n>     integer zoom for inline mode (default 1)\n"
+        "  --scale <n>     integer zoom for inline mode (overrides config)\n"
         "  --recolor <m>   remap colours to the terminal theme:\n"
         "                  off | hue | nearest | duotone | dither\n"
         "  --recolor-strength <0..1>   blend against the original (default 1)\n"
-        "  --keys          print the current keybinds and exit\n"
+        "  --keys          print the current keybinds and exit (pass a ROM for\n"
+        "                  that platform's overrides)\n"
         "  --force         run even if the terminal does not ack kitty graphics\n"
         "  --selftest <n>  run <n> frames headlessly and exit (no terminal)\n"
         "  --shot <file>   with --selftest, write the final frame as a BMP\n"
@@ -714,7 +742,7 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
 int main(int argc, char **argv) {
     const char *rom = NULL, *core_path = NULL, *shot = NULL, *recolor_arg = NULL;
     bool want_audio = true, force = false, inline_mode = true, keys_only = false;
-    int selftest = 0;
+    int selftest = 0, scale_arg = 0;
     double strength_arg = -1.0;
 
     for (int i = 1; i < argc; i++) {
@@ -724,7 +752,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--force")) force = true;
         else if (!strcmp(argv[i], "--inline")) inline_mode = true;
         else if (!strcmp(argv[i], "--fullscreen")) inline_mode = false;
-        else if (!strcmp(argv[i], "--scale") && i + 1 < argc) g_scale = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale_arg = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--recolor") && i + 1 < argc) recolor_arg = argv[++i];
         else if (!strcmp(argv[i], "--recolor-strength") && i + 1 < argc)
             strength_arg = atof(argv[++i]);
@@ -742,7 +770,10 @@ int main(int argc, char **argv) {
         snprintf(p, sizeof p, "%s/config", config_dir());
         config_defaults(&cfg);
         if (!file_exists(p)) config_write_default(p);
-        config_load(&cfg, p);
+        // Naming a ROM shows the bindings that ROM's platform would actually use.
+        const char *sys = system_for_ext(rom);
+        config_load(&cfg, p, sys);
+        if (*sys) printf("Platform overrides applied: %s\n\n", sys);
         config_print(&cfg, p);
         return 0;
     }
@@ -797,10 +828,15 @@ int main(int argc, char **argv) {
     snprintf(cfgpath, sizeof cfgpath, "%s/config", config_dir());
     config_defaults(&cfg);
     if (!file_exists(cfgpath)) config_write_default(cfgpath);
-    config_load(&cfg, cfgpath);
+    const char *system = system_for_ext(rom);
+    config_load(&cfg, cfgpath, system);
     if (recolor_mode >= 0) cfg.recolor = recolor_mode;
     if (strength_arg >= 0.0) cfg.recolor_strength = strength_arg;
     g_recolor_strength = cfg.recolor_strength;
+    // CLI --scale wins over the config default.
+    if (scale_arg > 0) g_scale = scale_arg;
+    else g_scale = cfg.scale;
+    logmsg("system: '%s', scale %d", system, g_scale);
 
     char exedir[512];
     snprintf(exedir, sizeof exedir, "%s", argv[0]);

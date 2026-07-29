@@ -92,7 +92,7 @@ pinned to the bottom row. Restores your screen on exit.
 | `--no-audio` | Disable audio output |
 | `--inline` | Play inline at native resolution (default) |
 | `--fullscreen` | Take over the screen and zoom to fit |
-| `--scale <n>` | Integer zoom for inline mode (default 1, max 8) |
+| `--scale <n>` | Integer zoom for inline mode, 1–8 (overrides the config) |
 | `--recolor <mode>` | `off` \| `hue` \| `nearest` \| `duotone` \| `dither` |
 | `--recolor-strength <0..1>` | Blend the recolour against the original (default 1) |
 | `--keys` | Print the current keybinds and exit |
@@ -131,7 +131,12 @@ Hotkeys:
 | F5 | Reset |
 | Tab (hold) | Fast-forward |
 | F8 | Cycle recolour mode |
+| `-` / `=` (or `+`) | Volume down / up, in steps of 10 |
 | `m` | Mute |
+
+Volume up and down are bound to both the shifted and unshifted spellings of
+those keys. The kitty protocol reports the *unshifted* key, so `shift`+`=`
+arrives as `=`; binding both means either works whatever your layout does.
 
 Quit deliberately takes a modifier — Escape is far too easy to hit by reflex
 mid-game, and it is unbound by default.
@@ -219,6 +224,7 @@ quit = Ctrl+c, Ctrl+q
 
 [options]
 volume           = 100
+scale            = 1       # inline-mode integer zoom, 1-8
 integer_scale    = false   # snap the image to whole multiples of native size
 show_stats       = false   # F1 toggles the status line at runtime
 pause_on_unfocus = true    # pause when the terminal loses focus
@@ -226,6 +232,32 @@ pause_on_unfocus = true    # pause when the terminal loses focus
 
 Modifiers apply to hotkeys only. Game buttons ignore them, so holding Ctrl will
 not stop your D-pad from working.
+
+### Per-platform overrides
+
+Suffix any section with a system name and it applies on top of the unsuffixed
+one. Useful because platforms want genuinely different settings — a Game Boy
+frame is 160×144 and wants far more zoom than a SNES, and it has no X/Y/L/R
+buttons to bind:
+
+```ini
+[options]
+scale = 2
+
+[options.gb]
+scale = 4
+
+[pad.gb]
+a = n
+```
+
+Systems: `snes` `nes` `gb` `gba` `genesis` `pce`, chosen from the ROM
+extension. Overrides are applied in a second pass, so they win regardless of
+where they sit in the file, and they only touch the keys they name — everything
+else falls through from the general section.
+
+`emu --keys <rom>` prints the bindings and options that ROM's platform will
+actually use, overrides included.
 
 ## Files
 
