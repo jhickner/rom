@@ -518,7 +518,8 @@ static void on_winch(int sig) {
 // Restores the terminal without touching anything unsafe, then re-raises so
 // the real signal disposition still applies.
 static void on_fatal(int sig) {
-    const char *restore = "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[<u\x1b[?25h\x1b[?1049l";
+    const char *restore =
+        "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[<u\x1b[2J\x1b[H\x1b[?25h\x1b[?1049l";
     (void)!write(term.fd, restore, strlen(restore));
     struct termios t;
     if (tcgetattr(term.fd, &t) == 0) {
@@ -639,7 +640,7 @@ static void usage(void) {
         "  --inline        play inline at native resolution (default)\n"
         "  --fullscreen    take over the screen and zoom to fit\n"
         "  --scale <n>     integer zoom for inline mode (overrides config)\n"
-        "  --recolor <m>   remap colours to the terminal theme:\n"
+        "  --recolor <m>   try to match colours to your terminal theme:\n"
         "                  off | hue | nearest | duotone | dither\n"
         "  --recolor-strength <0..1>   blend against the original (default 1)\n"
         "  --keys          print the current keybinds and exit (pass a ROM for\n"

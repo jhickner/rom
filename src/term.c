@@ -73,11 +73,11 @@ int term_reserve_inline(Term *t, int rows) {
 
 void term_leave(Term *t) {
     if (t->inline_mode) {
-        // Leave the final frame on screen and park the cursor below it.
-        char buf[64];
-        int n = snprintf(buf, sizeof buf, "\x1b[%d;1H\x1b[?25h\r\n",
-                         t->inline_origin + t->inline_rows);
-        (void)!write(t->fd, buf, (size_t)n);
+        // Delete the Kitty image, clear its window, and return the prompt to
+        // the top instead of leaving the final game frame behind.
+        const char *leave =
+            "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[2J\x1b[H\x1b[?25h";
+        (void)!write(t->fd, leave, strlen(leave));
     } else if (t->alt) {
         // Drop the image, leave alt screen, restore cursor.
         (void)!write(t->fd, "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[?25h\x1b[?1049l", 30);
