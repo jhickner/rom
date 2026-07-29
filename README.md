@@ -13,6 +13,25 @@ all come from the selected core at runtime.
 `rom` does not include games, BIOS files, or emulator cores. Only run software
 you are legally entitled to use.
 
+## Your terminal theme, inside the game
+
+Your terminal palette is not just decoration around the game — `rom` makes it
+part of the renderer. At startup it reads the terminal's ANSI colors plus its
+foreground and background, matches colors perceptually in Oklab, and builds a
+65,536-entry lookup table covering every RGB565 color. The result follows your
+actual theme with no per-frame palette analysis, no color shimmer, and
+negligible runtime cost.
+
+| Metroid Fusion — `hue` | Advance Wars — `dither` | Castlevania: Aria of Sorrow — `duotone` |
+|---|---|---|
+| ![Metroid Fusion recolored in hue mode](docs/screenshots/metroid-fusion-hue.png) | ![Advance Wars recolored with terminal-palette dithering](docs/screenshots/advance-wars-dither.png) | ![Castlevania Aria of Sorrow recolored in duotone mode](docs/screenshots/castlevania-aria-of-sorrow-duotone.png) |
+
+`hue` keeps the game's shading while adopting the nearest theme hues.
+`nearest` goes all-in on the terminal's 16-color identity, `duotone` maps the
+scene across the background-to-foreground ramp, and `dither` recovers shades
+between palette entries. Press **F8** while playing to cycle through them
+instantly, or blend any mode with the original using `--recolor-strength`.
+
 ## Quick start
 
 You need:
