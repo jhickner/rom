@@ -245,6 +245,8 @@ void   audio_flush(AudioCtx *a);
 
 void state_paths_init(const char *rom_path);
 const char *state_rom_base(void);
+int  game_volume_load(int fallback);
+int  game_volume_save(int volume);
 int  state_save(Core *c, int slot, char *err, size_t errlen);
 int  state_load(Core *c, int slot, char *err, size_t errlen);
 bool state_slot_exists(int slot);

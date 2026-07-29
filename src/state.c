@@ -8,6 +8,7 @@
 static char g_base[256];
 static char g_states_dir[512];
 static char g_saves_dir[512];
+static char g_settings_dir[512];
 static uint8_t *g_sram_shadow;
 static size_t   g_sram_shadow_size;
 
@@ -20,8 +21,10 @@ void state_paths_init(const char *rom_path) {
 
     snprintf(g_states_dir, sizeof g_states_dir, "%s/states", config_dir());
     snprintf(g_saves_dir, sizeof g_saves_dir, "%s/saves", config_dir());
+    snprintf(g_settings_dir, sizeof g_settings_dir, "%s/games", config_dir());
     ensure_dir(g_states_dir);
     ensure_dir(g_saves_dir);
+    ensure_dir(g_settings_dir);
 }
 
 const char *state_rom_base(void) { return g_base; }
@@ -32,6 +35,10 @@ static void state_path(char *out, size_t cap, int slot) {
 
 static void sram_path(char *out, size_t cap) {
     snprintf(out, cap, "%s/%s.srm", g_saves_dir, g_base);
+}
+
+static void volume_path(char *out, size_t cap) {
+    snprintf(out, cap, "%s/%s.volume", g_settings_dir, g_base);
 }
 
 // Write to a temp file and rename, so an interrupted save never truncates a
@@ -50,6 +57,27 @@ static int write_atomic(const char *path, const void *data, size_t size) {
     fclose(f);
     if (rename(tmp, path) != 0) { unlink(tmp); return -1; }
     return 0;
+}
+
+int game_volume_load(int fallback) {
+    char path[600], buf[32], extra;
+    volume_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f) return fallback;
+    int volume;
+    bool ok = fgets(buf, sizeof buf, f) &&
+              sscanf(buf, " %d %c", &volume, &extra) == 1;
+    fclose(f);
+    if (!ok || volume < 0 || volume > 100) return fallback;
+    return volume;
+}
+
+int game_volume_save(int volume) {
+    if (volume < 0 || volume > 100) return -1;
+    char path[600], buf[16];
+    volume_path(path, sizeof path);
+    int n = snprintf(buf, sizeof buf, "%d\n", volume);
+    return write_atomic(path, buf, (size_t)n);
 }
 
 int state_save(Core *c, int slot, char *err, size_t errlen) {

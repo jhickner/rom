@@ -154,7 +154,8 @@ scale = 4
 
 Sections may be suffixed with `snes`, `nes`, `gb`, `gba`, `genesis`, or `pce`
 for system-specific overrides. Run `rom --keys <rom>` to see the effective
-settings.
+settings. Volume changes are remembered separately for each ROM; the configured
+volume is the initial default.
 
 | Path | Contents |
 |---|---|

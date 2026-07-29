@@ -437,6 +437,8 @@ static void do_hotkey(int hk) {
         if (cfg.volume > 100) cfg.volume = 100;
         muted = false;              // reaching for the volume means you want to hear it
         audio_set_volume(audio, cfg.volume);
+        if (game_volume_save(cfg.volume) != 0)
+            logmsg("volume: failed to save per-game setting");
         osd("volume %d%%", cfg.volume);
         logmsg("volume -> %d%%", cfg.volume);
         break;
@@ -819,6 +821,10 @@ int main(int argc, char **argv) {
         // Naming a ROM shows the bindings that ROM's platform would actually use.
         const char *sys = system_for_ext(rom);
         config_load(&cfg, p, sys);
+        if (rom) {
+            state_paths_init(rom);
+            cfg.volume = game_volume_load(cfg.volume);
+        }
         if (*sys) printf("Platform overrides applied: %s\n\n", sys);
         config_print(&cfg, p);
         return 0;
@@ -944,6 +950,8 @@ int main(int argc, char **argv) {
            core.av.timing.sample_rate);
 
     state_paths_init(rom);
+    cfg.volume = game_volume_load(cfg.volume);
+    logmsg("volume: %d%% for %s", cfg.volume, state_rom_base());
     sram_load(&core);
 
     term.fd = ttyfd;
