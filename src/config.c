@@ -29,7 +29,7 @@ static const char *padnames[16] = {
 static const char *hknames[HK_COUNT] = {
     "quit", "pause", "reset", "save_state", "load_state",
     "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor",
-    "volume_up", "volume_down"
+    "volume_up", "volume_down", "scale_up", "scale_down"
 };
 
 const char *hotkey_name(int hk) {
@@ -117,6 +117,10 @@ void config_defaults(Config *c) {
     c->hotkey[HK_VOL_UP][1]       = '+';
     c->hotkey[HK_VOL_DOWN][0]     = '-';
     c->hotkey[HK_VOL_DOWN][1]     = '_';
+    c->hotkey[HK_SCALE_UP][0]     = ']';
+    c->hotkey[HK_SCALE_UP][1]     = '}';
+    c->hotkey[HK_SCALE_DOWN][0]   = '[';
+    c->hotkey[HK_SCALE_DOWN][1]   = '{';
 
     c->volume = 100;
     c->integer_scale = false;
@@ -248,7 +252,8 @@ void config_print(const Config *c, const char *path) {
     static const char *hkdesc[HK_COUNT] = {
         "Quit", "Pause", "Reset", "Save state", "Load state",
         "Next slot", "Previous slot", "Fast-forward (hold)", "Mute",
-        "Toggle status line", "Cycle recolor mode", "Volume up", "Volume down"
+        "Toggle status line", "Cycle recolor mode", "Volume up", "Volume down",
+        "Scale up", "Scale down"
     };
 
     printf("Game\n");

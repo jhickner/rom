@@ -54,7 +54,7 @@ uint32_t key_from_name(const char *name);
 enum {
     HK_QUIT, HK_PAUSE, HK_RESET, HK_SAVE_STATE, HK_LOAD_STATE,
     HK_SLOT_NEXT, HK_SLOT_PREV, HK_FAST_FORWARD, HK_MUTE, HK_STATS,
-    HK_RECOLOR, HK_VOL_UP, HK_VOL_DOWN,
+    HK_RECOLOR, HK_VOL_UP, HK_VOL_DOWN, HK_SCALE_UP, HK_SCALE_DOWN,
     HK_COUNT
 };
 
@@ -179,6 +179,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t m;
+    pthread_mutex_t wm;         // serializes tty writes with the main thread
     pthread_cond_t  cv;
     pthread_t       thread;
     bool            running;
@@ -207,6 +208,10 @@ void renderer_submit(Renderer *r, const uint8_t *rgb, int w, int h);
 void renderer_set_layout(Renderer *r, const Layout *l);
 void renderer_set_status(Renderer *r, const char *s);
 void renderer_set_osd(Renderer *r, const char *s, double seconds);
+// Take/release the tty so the main thread can emit escape codes without
+// landing in the middle of a frame transmission.
+void renderer_lock_tty(Renderer *r);
+void renderer_unlock_tty(Renderer *r);
 
 // ---------------------------------------------------------------- input
 
@@ -270,6 +275,9 @@ void term_leave(Term *t);
 // Scrolls up `rows` lines of room at the cursor and reports the absolute row
 // the block now starts on. Inline mode only.
 int  term_reserve_inline(Term *t, int rows);
+// Drops the current image, wipes the reserved block, and reserves `rows`
+// again from the same origin. Returns the new origin. Inline mode only.
+int  term_resize_inline(Term *t, int rows);
 int  term_size(int fd, int *cols, int *rows, int *cell_w, int *cell_h);
 bool term_probe_graphics(int fd);
 

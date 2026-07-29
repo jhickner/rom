@@ -388,6 +388,20 @@ static void submit_frame(void) {
     }
 }
 
+// Re-lays out the inline block for the current g_scale, growing or shrinking
+// the rows reserved in the scrollback to match.
+static void apply_scale(void) {
+    if (!term.inline_mode) { g_geom_dirty = true; return; }
+    int c, r, cw, ch;
+    if (term_size(term.fd, &c, &r, &cw, &ch) != 0) { g_geom_dirty = true; return; }
+    if (cw <= 0) cw = 8;
+    if (ch <= 0) ch = 16;
+    renderer_lock_tty(&rend);
+    term_resize_inline(&term, inline_rows_needed(c, r, cw, ch));
+    renderer_unlock_tty(&rend);
+    recompute_layout();
+}
+
 // ------------------------------------------------------------------ hotkeys
 
 static void do_hotkey(int hk) {
@@ -452,6 +466,28 @@ static void do_hotkey(int hk) {
                 theme.from_terminal ? "" : " (built-in palette)");
             logmsg("recolor mode -> %s", recolor_mode_name(m));
         }
+        break;
+    }
+    case HK_SCALE_UP:
+    case HK_SCALE_DOWN: {
+        int want = g_scale + (hk == HK_SCALE_UP ? 1 : -1);
+        if (want < 1) want = 1;
+        if (want > 8) want = 8;
+        if (want == g_scale) {
+            osd("scale %dx", g_scale);
+            break;
+        }
+        g_scale = want;
+        if (!term.inline_mode) {
+            osd("scale %dx (inline mode only)", g_scale);
+            break;
+        }
+        apply_scale();
+        if (g_eff_scale != g_scale)
+            osd("scale %dx (window fits %dx)", g_scale, g_eff_scale);
+        else
+            osd("scale %dx", g_scale);
+        logmsg("scale -> %d (effective %d)", g_scale, g_eff_scale);
         break;
     }
     case HK_STATS:

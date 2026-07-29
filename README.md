@@ -89,7 +89,7 @@ Use `--core <path>` to select one directly.
 |---|---|
 | `--core <path>` | Use a specific core |
 | `--fullscreen` | Fill the terminal window |
-| `--scale <n>` | Integer zoom in inline mode, 1–8 (default 2) |
+| `--scale <n>` | Integer zoom in inline mode, 1–8 (default 2); change live with `[` / `]` |
 | `--slot <n>` | Initial save-state slot, 0–9 |
 | `--no-audio` | Disable audio |
 | `--recolor <mode>` | `off`, `hue`, `nearest`, `duotone`, or `dither` |
@@ -118,6 +118,7 @@ image when the game exits.
 | F5 | Reset |
 | Tab | Fast-forward while held |
 | F8 | Cycle recolor mode |
+| `[` / `]` | Scale down / up (inline mode) |
 | `-` / `=` | Volume down / up |
 | `m` | Mute |
 

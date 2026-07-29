@@ -154,6 +154,7 @@ static void *render_thread(void *arg) {
             msg = nm; msgcap = need_msg;
         }
 
+        pthread_mutex_lock(&r->wm);
         if (clear) (void)writeall(r->ttyfd, "\x1b[2J", 4);
 
         size_t blen = b64enc(src, raw, b64);
@@ -162,6 +163,7 @@ static void *render_thread(void *arg) {
             draw_status(&l, sbuf, sizeof sbuf, osd, status);
             (void)writeall(r->ttyfd, sbuf, strlen(sbuf));
         }
+        pthread_mutex_unlock(&r->wm);
 
     release:
         pthread_mutex_lock(&r->m);
@@ -182,6 +184,7 @@ int renderer_start(Renderer *r, int ttyfd) {
     r->running = true;
     r->layout_dirty = true;
     pthread_mutex_init(&r->m, NULL);
+    pthread_mutex_init(&r->wm, NULL);
     pthread_cond_init(&r->cv, NULL);
     if (pthread_create(&r->thread, NULL, render_thread, r) != 0) {
         r->running = false;
@@ -198,6 +201,7 @@ void renderer_stop(Renderer *r) {
     pthread_mutex_unlock(&r->m);
     pthread_join(r->thread, NULL);
     for (int i = 0; i < RB_COUNT; i++) free(r->buf[i]);
+    pthread_mutex_destroy(&r->wm);
     pthread_mutex_destroy(&r->m);
     pthread_cond_destroy(&r->cv);
     memset(r, 0, sizeof *r);
@@ -245,4 +249,12 @@ void renderer_set_osd(Renderer *r, const char *s, double seconds) {
     snprintf(r->osd, sizeof r->osd, "%s", s);
     r->osd_until = now_sec() + seconds;
     pthread_mutex_unlock(&r->m);
+}
+
+void renderer_lock_tty(Renderer *r) {
+    if (r->running) pthread_mutex_lock(&r->wm);
+}
+
+void renderer_unlock_tty(Renderer *r) {
+    if (r->running) pthread_mutex_unlock(&r->wm);
 }

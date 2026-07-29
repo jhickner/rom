@@ -71,6 +71,47 @@ int term_reserve_inline(Term *t, int rows) {
     return t->inline_origin;
 }
 
+int term_resize_inline(Term *t, int rows) {
+    if (rows < 1) rows = 1;
+    if (t->inline_rows < 1) return term_reserve_inline(t, rows);
+
+    char buf[128];
+    int n = 0;
+    // Remove our image, then clear every row we currently own so a shrink does
+    // not leave stale pixels or a stranded status line behind.
+    n = snprintf(buf, sizeof buf, "\x1b_Ga=d,d=I,i=1\x1b\\");
+    (void)!write(t->fd, buf, (size_t)n);
+    for (int i = 0; i < t->inline_rows; i++) {
+        n = snprintf(buf, sizeof buf, "\x1b[%d;1H\x1b[2K", t->inline_origin + i);
+        (void)!write(t->fd, buf, (size_t)n);
+    }
+
+    if (rows <= t->inline_rows) {
+        // Shrinking: keep the origin, just claim fewer rows. The leftover rows
+        // below stay blank rather than being scrolled away, which would move
+        // the user's scrollback for no reason.
+        t->inline_rows = rows;
+        return t->inline_origin;
+    }
+
+    // Growing: park the cursor on the last row we own and scroll up the extra
+    // rows we need. The origin is derived arithmetically rather than with a
+    // cursor-position query, which would race the game's keyboard reads.
+    int bottom = t->inline_origin + t->inline_rows - 1;
+    n = snprintf(buf, sizeof buf, "\x1b[%d;1H", bottom);
+    (void)!write(t->fd, buf, (size_t)n);
+    int extra = rows - t->inline_rows;
+    for (int i = 0; i < extra; i++) (void)!write(t->fd, "\r\n", 2);
+
+    int cols = 0, trows = 0, cw = 0, ch = 0;
+    if (term_size(t->fd, &cols, &trows, &cw, &ch) != 0 || trows < 1) trows = 24;
+    int overflow = bottom + extra - trows;      // rows the terminal scrolled up
+    if (overflow > 0) t->inline_origin -= overflow;
+    if (t->inline_origin < 1) t->inline_origin = 1;
+    t->inline_rows = rows;
+    return t->inline_origin;
+}
+
 void term_leave(Term *t) {
     if (t->inline_mode) {
         // Delete only our Kitty image and status line. Preserve the rest of
