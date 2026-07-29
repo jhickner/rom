@@ -35,9 +35,6 @@ $(BIN): $(OBJ)
 src/%.o: src/%.c src/rom.h src/libretro.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-kittybench: tools/kittybench.c
-	$(CC) $(CFLAGS) $< -o $@
-
 core-snes:
 	mkdir -p vendor cores
 	test -d vendor/snes9x/.git || git clone --depth 1 https://github.com/libretro/snes9x vendor/snes9x
@@ -55,6 +52,6 @@ install: $(BIN)
 	install -m 755 $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)
 
 clean:
-	rm -f src/*.o $(BIN) kittybench
+	rm -f src/*.o $(BIN)
 
 .PHONY: all clean core-snes core-gba install
