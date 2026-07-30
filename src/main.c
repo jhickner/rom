@@ -570,27 +570,32 @@ static void on_fatal(int sig) {
 
 // ------------------------------------------------------------- core lookup
 
-// One table drives core selection, the per-platform config slug, and the
-// build hint printed when a core is missing.
-static const struct {
-    const char *exts;      // space separated
-    const char *sys;       // slug for [options.<sys>] sections
-    const char *core;
-    const char *repo;      // github path
-    const char *target;    // verified top-level make target, NULL if untested
-} CORES[] = {
-    { "sfc smc fig", "snes", "snes9x_libretro" CORE_EXT, "libretro/snes9x",
-      "core-snes" },
-    { "gba", "gba", "mgba_libretro" CORE_EXT, "libretro/mgba",
-      "core-gba" },
-    { "nes",        "nes",     "fceumm_libretro" CORE_EXT,
-      "libretro/libretro-fceumm",          NULL },
-    { "gb gbc",     "gb",      "gambatte_libretro" CORE_EXT,
-      "libretro/gambatte-libretro",        NULL },
-    { "md gen smd", "genesis", "genesis_plus_gx_libretro" CORE_EXT,
-      "libretro/Genesis-Plus-GX",          NULL },
-    { "pce",        "pce",     "mednafen_pce_fast_libretro" CORE_EXT,
-      "libretro/beetle-pce-fast-libretro", NULL },
+#if defined(__APPLE__)
+// mGBA's libretro makefile picks up the system locale header only when told to.
+#define MGBA_ARGS   { "CC=cc -DHAVE_LOCALE" }
+// The zlib bundled with beetle-pce takes its classic-Mac-OS branch when the
+// SDK defines TARGET_OS_MAC, which then redefines fdopen and breaks <stdio.h>.
+// Linking the system zlib sidesteps it; LIBS is spelled out so the build does
+// not need pkg-config.
+#define PCE_ARGS    { "SYSTEM_ZLIB=1", "LIBS=-lz" }
+#else
+#define MGBA_ARGS   { NULL }
+#define PCE_ARGS    { NULL }
+#endif
+
+static const CoreSpec CORES[] = {
+    { "sfc smc fig", "snes",    "snes9x_libretro" CORE_EXT,
+      "libretro/snes9x",                   "libretro", NULL, { NULL } },
+    { "gba",         "gba",     "mgba_libretro" CORE_EXT,
+      "libretro/mgba",                     NULL, "Makefile.libretro", MGBA_ARGS },
+    { "nes",         "nes",     "fceumm_libretro" CORE_EXT,
+      "libretro/libretro-fceumm",          NULL, NULL, { NULL } },
+    { "gb gbc",      "gb",      "gambatte_libretro" CORE_EXT,
+      "libretro/gambatte-libretro",        NULL, NULL, { NULL } },
+    { "md gen smd",  "genesis", "genesis_plus_gx_libretro" CORE_EXT,
+      "libretro/Genesis-Plus-GX",          NULL, "Makefile.libretro", { NULL } },
+    { "pce",         "pce",     "mednafen_pce_fast_libretro" CORE_EXT,
+      "libretro/beetle-pce-fast-libretro", NULL, NULL, PCE_ARGS },
 };
 #define NCORES ((int)(sizeof CORES / sizeof CORES[0]))
 
@@ -645,9 +650,7 @@ static int find_core(char *out, size_t cap, const char *rom, const char *exedir)
     return -1;
 }
 
-// Saying where to put a core is not much help without saying how to get one.
-static void print_missing_core(const char *rom) {
-    int i = core_entry_for(rom);
+static void print_missing_core(const char *rom, int i) {
     fprintf(stderr, APP_NAME ": no core found for %s\n", rom);
     if (i < 0) {
         fprintf(stderr, "  unrecognised extension - pass --core <path>\n");
@@ -656,17 +659,52 @@ static void print_missing_core(const char *rom) {
     fprintf(stderr, "  needs:    %s\n", CORES[i].core);
     fprintf(stderr, "  searched: %s/cores, ./cores, <exedir>/../cores\n\n",
             config_dir());
-    if (CORES[i].target) {
-        fprintf(stderr,
-                "  build and install it from the rom source directory:\n"
-                "    make %s\n", CORES[i].target);
-    } else {
-        fprintf(stderr, "  build it from https://github.com/%s\n"
-                        "  (see that repo for its libretro target), then copy\n"
-                        "  %s into cores/\n", CORES[i].repo, CORES[i].core);
+    fprintf(stderr, "  build it from https://github.com/%s and copy\n"
+                    "  %s into cores/, or point at one you already have:\n"
+                    "    " APP_NAME " --core <path> \"%s\"\n",
+            CORES[i].repo, CORES[i].core, rom);
+}
+
+static bool ask_yes(void) {
+    char line[64];
+    if (!fgets(line, sizeof line, stdin)) return false;
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    return *p == '\n' || *p == '\r' || *p == 0 || *p == 'y' || *p == 'Y';
+}
+
+// Resolves the core for `rom`, offering to fetch and build it when it is
+// missing. Building needs a real terminal to ask on, so batch runs still get
+// the plain instructions.
+static int obtain_core(char *out, size_t cap, const char *rom, const char *exedir) {
+    if (find_core(out, cap, rom, exedir) == 0) return 0;
+
+    int i = core_entry_for(rom);
+    if (i < 0 || !isatty(STDIN_FILENO)) {
+        print_missing_core(rom, i);
+        return -1;
     }
-    fprintf(stderr, "\n  or point at one you already have:\n"
-                    "    " APP_NAME " --core <path> \"%s\"\n", rom);
+
+    printf(APP_NAME ": no core installed for %s\n\n"
+           "  %s can be built from https://github.com/%s\n"
+           "  and installed into %s/cores.\n"
+           "  Needs git, make, and a C/C++ toolchain, plus a few minutes.\n\n"
+           "Fetch and build it now? [Y/n] ",
+           rom, CORES[i].core, CORES[i].repo, config_dir());
+    fflush(stdout);
+    if (!ask_yes()) {
+        printf("\n");
+        print_missing_core(rom, i);
+        return -1;
+    }
+    printf("\n");
+
+    if (core_fetch(&CORES[i], out, cap) != 0) {
+        fprintf(stderr, "\n");
+        print_missing_core(rom, i);
+        return -1;
+    }
+    return 0;
 }
 
 static void usage(void) {
@@ -885,10 +923,7 @@ int main(int argc, char **argv) {
     if (selftest > 0) {
         char cb[600];
         if (!core_path) {
-            if (find_core(cb, sizeof cb, rom, dirname(exedir0)) != 0) {
-                print_missing_core(rom);
-                return 1;
-            }
+            if (obtain_core(cb, sizeof cb, rom, dirname(exedir0)) != 0) return 1;
             core_path = cb;
         }
         // No terminal to ask, so the built-in palette stands in.
@@ -931,10 +966,7 @@ int main(int argc, char **argv) {
     char *ed = dirname(exedir);
     char corebuf[600];
     if (!core_path) {
-        if (find_core(corebuf, sizeof corebuf, rom, ed) != 0) {
-            print_missing_core(rom);
-            return 1;
-        }
+        if (obtain_core(corebuf, sizeof corebuf, rom, ed) != 0) return 1;
         core_path = corebuf;
     }
 

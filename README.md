@@ -34,11 +34,11 @@ Then:
 git clone https://github.com/jhickner/rom
 cd rom
 make
-make core-snes
 ./rom "path/to/game.sfc"
 ```
 
-For Game Boy Advance, use `make core-gba` and pass a `.gba` file.
+The first time you open a ROM for a platform you have no core for, `rom` offers
+to fetch and build that core.
 
 Run `rom` directly in Ghostty or kitty, not inside tmux. tmux interferes with
 the graphics and keyboard protocols.
@@ -51,16 +51,24 @@ make install PREFIX="$HOME/.local"
 
 ## Cores
 
-`rom` uses libretro cores: `.dylib` on macOS and `.so` on Linux. These targets
-build and install the tested cores:
+`rom` uses libretro cores: `.dylib` on macOS and `.so` on Linux.
 
-```sh
-make core-snes
-make core-gba
+Open a ROM without its core and `rom` asks before doing anything:
+
+```
+rom: no core installed for roms/Link's Awakening.gb
+
+  gambatte_libretro.dylib can be built from https://github.com/libretro/gambatte-libretro
+  and installed into /Users/you/.config/rom/cores.
+  Needs git, make, and a C/C++ toolchain, plus a few minutes.
+
+Fetch and build it now? [Y/n]
 ```
 
-If a core is missing, run the ROM anyway. `rom` prints the required filename
-and either an exact build command or the upstream repository.
+Say yes and it shallow-clones the repository into `~/.config/rom/src/`, builds
+it, installs the core, and starts the game. Say no and it prints the filename
+and repository so you can build it yourself. Runs without a terminal on stdin
+skip the prompt and print the same instructions.
 
 Cores are searched in:
 

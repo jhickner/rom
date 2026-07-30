@@ -113,6 +113,22 @@ int  core_load(Core *c, const char *path);
 int  core_load_game(Core *c, const char *rom_path);
 void core_unload(Core *c);
 
+// One table entry drives core selection, the per-platform config slug, and
+// fetching the core when it is not installed yet.
+typedef struct {
+    const char *exts;      // space separated
+    const char *sys;       // slug for [options.<sys>] sections
+    const char *core;      // shared library filename, also the build artifact
+    const char *repo;      // github path
+    const char *subdir;    // directory within the repo to build in, or NULL
+    const char *makefile;  // -f argument, or NULL for the default Makefile
+    const char *makeargs[3];  // extra make arguments, NULL terminated
+} CoreSpec;
+
+// Clones the core's repo under the config dir, builds it, and installs the
+// result into <config>/cores. Writes the installed path to `out`.
+int core_fetch(const CoreSpec *spec, char *out, size_t cap);
+
 // ---------------------------------------------------------------- theme
 
 typedef struct {
