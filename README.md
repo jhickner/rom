@@ -202,11 +202,27 @@ are ordinary text, so tmux moves, scrolls, and repaints them without
 understanding any of it, and the terminal underneath substitutes pixels. Scaling
 and resizing work as usual.
 
-One thing does not carry over: tmux 3.5 has no key-release reporting, so
-releases are inferred from auto-repeat instead — a key lifts once its repeats
-stop. Holding a direction therefore hiccups once at the start, while the
-keyboard waits out its delay-until-repeat. Outside tmux, real releases from the
-kitty keyboard protocol are used as before.
+Input goes through the same trick. tmux itself has no notion of a key release,
+but it does not have to: the keyboard protocol is enabled on the terminal
+underneath by passing the escape through, and tmux hands the key reports it does
+not recognize — releases and modifier-only keys among them — straight to the
+pane. So key handling inside tmux is the same as outside it, Right Shift for
+Select included.
+
+If the terminal does not answer the capability query, `rom` falls back to
+inferring releases from auto-repeat: a key lifts once its repeats stop, so
+holding a direction hiccups once at the start while the keyboard waits out its
+delay-until-repeat.
+
+The keyboard mode belongs to the terminal, which every pane shares, so `rom`
+hands it back whenever another pane takes the focus and takes it again on
+return. If it upsets your tmux bindings anyway, turn it off and take the
+inferred releases instead:
+
+```ini
+[options]
+tmux_keyboard = false
+```
 
 Expect a lower frame rate than a bare terminal: every frame is copied through
 tmux on its way out.
@@ -294,7 +310,7 @@ are written atomically and SRAM is autosaved every five seconds when changed.
 
 - macOS (CoreAudio) or Linux (ALSA)
 - Ghostty or kitty required, optionally with tmux on top
-- In tmux, key releases are inferred from auto-repeat
+- In tmux, key releases need a terminal that speaks the kitty keyboard protocol
 - GL cores on macOS only; Linux is software-rendered until an EGL backend lands
 - No Vulkan cores
 - Player 1 keyboard input only

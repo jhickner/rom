@@ -132,6 +132,7 @@ void config_defaults(Config *c) {
     c->scale = 2;
     c->term_scale = true;
     c->async_readback = true;
+    c->tmux_keyboard = true;
 }
 
 static char *trim(char *s) {
@@ -217,6 +218,7 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
             else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
             else if (strcasecmp(k, "async_readback") == 0) c->async_readback = parse_bool(v);
+            else if (strcasecmp(k, "tmux_keyboard") == 0) c->tmux_keyboard = parse_bool(v);
             else if (strcasecmp(k, "recolor") == 0) {
                 int m = recolor_mode_from_name(v);
                 if (m < 0) fprintf(stderr, "config:%d: unknown recolor mode '%s'\n", lineno, v);
@@ -322,6 +324,7 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %s\n", "integer_scale", c->integer_scale ? "true" : "false");
     printf("  %-22s %s\n", "term_scale", c->term_scale ? "true" : "false");
     printf("  %-22s %s\n", "async_readback", c->async_readback ? "true" : "false");
+    printf("  %-22s %s\n", "tmux_keyboard", c->tmux_keyboard ? "true" : "false");
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
     printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
@@ -372,6 +375,11 @@ int config_write_default(const char *path) {
                "# readback with emulation instead of stalling on it. Adds one frame of input\n"
                "# latency. No effect on software-rendered cores.\n");
     fprintf(f, "async_readback   = %s\n", c.async_readback ? "true" : "false");
+    fprintf(f, "# tmux_keyboard: inside tmux, reach past it to put the terminal itself into\n"
+               "# the kitty keyboard protocol, the only way to get real key releases there.\n"
+               "# Set false if it upsets your tmux key bindings; releases are then inferred\n"
+               "# from auto-repeat instead.\n");
+    fprintf(f, "tmux_keyboard    = %s\n", c.tmux_keyboard ? "true" : "false");
     fprintf(f, "# recolor: off | hue | nearest | duotone | dither\n");
     fprintf(f, "recolor          = %s\n", recolor_mode_name(c.recolor));
     fprintf(f, "recolor_strength = %.2f\n", c.recolor_strength);

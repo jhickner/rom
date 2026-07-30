@@ -85,6 +85,8 @@ typedef struct {
                                // here instead, at scale^2 the bytes on the wire
     bool     async_readback;   // hw cores: overlap GPU readback with emulation
                                // at the cost of one frame of input latency
+    bool     tmux_keyboard;    // under tmux, put the terminal into the kitty
+                               // keyboard protocol for real key releases
     CoreOption core_opt[MAX_CORE_OPTIONS];
     int        n_core_opt;
 } Config;
@@ -284,6 +286,9 @@ bool gfx_passthrough_ok(void);
 // Appends one graphics APC escape: `head` is the control data, `payload` the
 // base64 body (omitted when `plen` is 0). Returns bytes written.
 size_t gfx_apc(char *out, const char *head, const char *payload, size_t plen);
+// Copies an escape sequence meant for the terminal rather than for tmux,
+// wrapping it when needed. `out` needs room for len * 2 + 16.
+size_t gfx_wrap(char *out, const char *seq, size_t len);
 // Upper bound on what gfx_apc writes for a `plen`-byte payload.
 size_t gfx_apc_max(size_t plen);
 // Drops our image from the terminal.
@@ -300,6 +305,7 @@ typedef struct {
     bool     held[KEY_MAX_ - 0xE000 + 0x200];  // unused; see input.c
     int      ttyfd;
     bool     kitty_kbd;
+    bool     kbd_active;    // the protocol is currently pushed on the terminal
     bool     focus_events;
 } Input;
 
@@ -309,8 +315,15 @@ typedef struct {
     bool     repeat;
 } KeyEvent;
 
-int  input_init(Input *in, int ttyfd);
+// `allow_tmux_kbd` permits reaching past tmux to put the terminal itself into
+// the kitty keyboard protocol, which is the only way to get real key releases
+// there. Ignored outside tmux, where the protocol is always used if available.
+int  input_init(Input *in, int ttyfd, bool allow_tmux_kbd);
 void input_shutdown(Input *in);
+// Release the terminal's keyboard mode while another pane has the focus, and
+// take it back on return. No-ops when the protocol is not in use.
+void input_kbd_push(Input *in);
+void input_kbd_pop(Input *in);
 // Drains pending input. Returns number of events written to `ev`.
 int  input_poll(Input *in, KeyEvent *ev, int max_ev);
 

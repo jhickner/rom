@@ -16,6 +16,8 @@ static double  esc_since;   // when a lone ESC started waiting for a sequence
 
 static uint32_t map_tilde(int n) {
     switch (n) {
+    case 1:  return KEY_HOME;      // the form tmux and screen send
+    case 4:  return KEY_END;
     case 2:  return KEY_INSERT;
     case 3:  return KEY_DELETE;
     case 5:  return KEY_PGUP;
@@ -63,8 +65,18 @@ static uint32_t map_pua(uint32_t cp) {
     return cp;
 }
 
+// Keyboard-protocol escapes are for the terminal running tmux, not for tmux, so
+// they go through the same DCS passthrough the graphics use. tmux does not
+// recognise the replies or the key reports that come back and passes them
+// through to us untouched, which is what makes this work at all.
+static void kbd_seq(int fd, const char *seq) {
+    char buf[64];
+    size_t n = gfx_wrap(buf, seq, strlen(seq));
+    (void)!write(fd, buf, n);
+}
+
 static bool probe_kitty_kbd(int fd) {
-    if (write(fd, "\x1b[?u", 4) < 0) return false;
+    kbd_seq(fd, "\x1b[?u");
     struct pollfd p = { .fd = fd, .events = POLLIN };
     char buf[64];
     size_t got = 0;
@@ -83,15 +95,16 @@ static bool probe_kitty_kbd(int fd) {
     return got >= 3 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == '?';
 }
 
-int input_init(Input *in, int ttyfd) {
+int input_init(Input *in, int ttyfd, bool allow_tmux_kbd) {
     memset(in, 0, sizeof *in);
     in->ttyfd = ttyfd;
     pendlen = 0;
-    in->kitty_kbd = probe_kitty_kbd(ttyfd);
-    if (in->kitty_kbd) {
-        char buf[32];
-        int n = snprintf(buf, sizeof buf, "\x1b[>%du", KITTY_KBD_FLAGS);
-        (void)!write(ttyfd, buf, (size_t)n);
+    if (gfx_tmux() && !allow_tmux_kbd) {
+        // Asked to leave the terminal's keyboard mode alone under tmux.
+        in->kitty_kbd = false;
+    } else {
+        in->kitty_kbd = probe_kitty_kbd(ttyfd);
+        if (in->kitty_kbd) input_kbd_push(in);
     }
     // Focus reporting is far more widely supported than the kitty keyboard
     // protocol, so enable it regardless. Terminals that ignore it simply never
@@ -101,8 +114,25 @@ int input_init(Input *in, int ttyfd) {
     return in->kitty_kbd ? 0 : -1;
 }
 
+// Enabling the protocol pushes onto the terminal's mode stack, so pushes and
+// pops have to stay paired: under tmux the mode belongs to the terminal, which
+// every other pane shares.
+void input_kbd_push(Input *in) {
+    if (!in->kitty_kbd || in->kbd_active) return;
+    char buf[32];
+    snprintf(buf, sizeof buf, "\x1b[>%du", KITTY_KBD_FLAGS);
+    kbd_seq(in->ttyfd, buf);
+    in->kbd_active = true;
+}
+
+void input_kbd_pop(Input *in) {
+    if (!in->kbd_active) return;
+    kbd_seq(in->ttyfd, "\x1b[<u");
+    in->kbd_active = false;
+}
+
 void input_shutdown(Input *in) {
-    if (in->kitty_kbd) (void)!write(in->ttyfd, "\x1b[<u", 4);
+    input_kbd_pop(in);
     if (in->focus_events) (void)!write(in->ttyfd, "\x1b[?1004l", 8);
     in->kitty_kbd = false;
     in->focus_events = false;
@@ -113,6 +143,21 @@ void input_shutdown(Input *in) {
 static size_t parse_csi(const uint8_t *buf, size_t len, KeyEvent *ev, bool *got) {
     *got = false;
     if (len < 2) return 0;
+    if (buf[1] == 'O') {
+        // SS3, which is how F1-F4 arrive from a terminal that is not speaking
+        // the kitty protocol - tmux among them - and how the arrows arrive in
+        // application cursor mode. F3 is the odd one: 'R' as a CSI final is the
+        // cursor-position report, so map_final leaves it alone.
+        if (len < 3) return 0;
+        uint32_t key = buf[2] == 'R' ? (uint32_t)KEY_F3 : map_final((char)buf[2]);
+        if (key != KEY_NONE) {
+            *got = true;
+            ev->key = key;
+            ev->pressed = true;
+            ev->repeat = false;
+        }
+        return 3;
+    }
     if (buf[1] != '[') {
         // Bare ESC, or ESC+key with the protocol inactive.
         *got = true;

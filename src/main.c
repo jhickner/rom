@@ -614,6 +614,12 @@ static void handle_input(void) {
                 memset(held_ascii, 0, sizeof held_ascii);
                 memset(held_spec, 0, sizeof held_spec);
             }
+            // Under tmux the keyboard mode belongs to the terminal, which every
+            // pane shares, so hand it back while someone else has the focus.
+            if (gfx_tmux()) {
+                if (out) input_kbd_pop(&input);
+                else input_kbd_push(&input);
+            }
             if (cfg.pause_on_unfocus) {
                 focus_paused = out;
                 if (audio) audio_flush(audio);
@@ -1339,7 +1345,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    int kbd = input_init(&input, ttyfd);
+    int kbd = input_init(&input, ttyfd, cfg.tmux_keyboard);
     g_infer_release = !input.kitty_kbd;
     logmsg("keyboard: %s", input.kitty_kbd ? "kitty protocol, real releases"
                                            : "inferred releases from repeat");

@@ -16,7 +16,7 @@ static void delete_head(char *out, size_t cap) {
 }
 
 static bool   g_tmux;
-static char   g_restore[96];
+static char   g_restore[160];
 static size_t g_restore_len;
 
 static int writeall(int fd, const char *p, size_t n) {
@@ -57,16 +57,32 @@ size_t gfx_apc(char *out, const char *head, const char *payload, size_t plen) {
 
 size_t gfx_apc_max(size_t plen) { return plen + 128; }
 
+size_t gfx_wrap(char *out, const char *seq, size_t len) {
+    if (!g_tmux) {
+        memcpy(out, seq, len);
+        return len;
+    }
+    memcpy(out, "\x1bPtmux;", 7);
+    size_t o = 7;
+    for (size_t i = 0; i < len; i++) {
+        if (seq[i] == 0x1b) out[o++] = 0x1b;
+        out[o++] = seq[i];
+    }
+    out[o++] = 0x1b; out[o++] = '\\';
+    return o;
+}
+
 void gfx_init(void) {
     const char *t = getenv("TMUX");
     g_tmux = t && *t;
 
-    char head[48], del[64];
+    char head[48];
     delete_head(head, sizeof head);
-    size_t n = gfx_apc(del, head, NULL, 0);
-    memcpy(g_restore, del, n);
-    // Leave the keyboard protocol, show the cursor, drop the alt screen.
-    const char *tail = "\x1b[<u\x1b[?25h\x1b[?1049l";
+    size_t n = gfx_apc(g_restore, head, NULL, 0);
+    // Popping the keyboard protocol has to reach the terminal itself, so it
+    // needs wrapping too; the cursor and alt screen are tmux's own business.
+    n += gfx_wrap(g_restore + n, "\x1b[<u", 4);
+    const char *tail = "\x1b[?25h\x1b[?1049l";
     size_t tl = strlen(tail);
     memcpy(g_restore + n, tail, tl);
     g_restore_len = n + tl;
