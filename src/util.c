@@ -24,6 +24,24 @@ const char *config_dir(void) {
     return dir;
 }
 
+// Write to a temp file and rename, so an interrupted save never truncates a
+// good one.
+int write_file_atomic(const char *path, const void *data, size_t size) {
+    char tmp[600];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return -1;
+    size_t w = fwrite(data, 1, size, f);
+    if (fflush(f) != 0 || fsync(fileno(f)) != 0 || w != size) {
+        fclose(f);
+        unlink(tmp);
+        return -1;
+    }
+    fclose(f);
+    if (rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
 int ensure_dir(const char *path) {
     char tmp[512];
     snprintf(tmp, sizeof tmp, "%s", path);

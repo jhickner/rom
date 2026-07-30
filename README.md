@@ -122,10 +122,12 @@ its siblings in the same directory and carries its `ecwolf.pk3` internally.
 
 ```sh
 ./rom [options] <rom>
+./rom --resume
 ```
 
 | Option | Description |
 |---|---|
+| `--resume` | Pick from the games you have been playing |
 | `--core <path>` | Use a specific core |
 | `--fullscreen` | Fill the terminal window |
 | `--scale <n>` | Integer zoom in inline mode, 1–8 (default 2); change live with `[` / `]` |
@@ -140,6 +142,24 @@ its siblings in the same directory and carries its `ecwolf.pk3` internally.
 
 Inline mode is the default. It leaves scrollback intact and removes its Kitty
 image when the game exits.
+
+### Resuming
+
+`rom --resume` lists the last 40 games you played, newest first, with when you
+last played and which save-state slots are filled:
+
+```
+Resume  ↑/↓ move · enter play · q cancel
+
+    1  Super Mario World      snes     2h ago      state 0
+    2  Links Awakening        gb       yesterday   state 0,3
+    3  doom2                  doom     4d ago
+```
+
+Arrows or `j`/`k` move, Enter plays, `1`–`9` jump straight to a game, `q`
+cancels. Games are matched by absolute path, so entries survive a change of
+directory; anything that has been moved or deleted drops off the list. The
+battery save loads as always — press F3 to pick up from a save state.
 
 ### Controls
 
@@ -235,6 +255,7 @@ volume is the initial default.
 | `~/.config/rom/config` | Settings and bindings |
 | `~/.config/rom/saves/` | Battery saves |
 | `~/.config/rom/states/` | Save states |
+| `~/.config/rom/recent` | Games played, for `--resume` |
 | `~/.config/rom/rom.log` | Frontend and core log |
 
 Games pause when the terminal loses focus and resume when it returns. Saves

@@ -12,12 +12,16 @@ static char g_settings_dir[512];
 static uint8_t *g_sram_shadow;
 static size_t   g_sram_shadow_size;
 
-void state_paths_init(const char *rom_path) {
+void rom_base_name(const char *rom_path, char *out, size_t cap) {
     const char *slash = strrchr(rom_path, '/');
     const char *name = slash ? slash + 1 : rom_path;
-    snprintf(g_base, sizeof g_base, "%s", name);
-    char *dot = strrchr(g_base, '.');
-    if (dot && dot != g_base) *dot = 0;
+    snprintf(out, cap, "%s", name);
+    char *dot = strrchr(out, '.');
+    if (dot && dot != out) *dot = 0;
+}
+
+void state_paths_init(const char *rom_path) {
+    rom_base_name(rom_path, g_base, sizeof g_base);
 
     snprintf(g_states_dir, sizeof g_states_dir, "%s/states", config_dir());
     snprintf(g_saves_dir, sizeof g_saves_dir, "%s/saves", config_dir());
@@ -41,24 +45,6 @@ static void volume_path(char *out, size_t cap) {
     snprintf(out, cap, "%s/%s.volume", g_settings_dir, g_base);
 }
 
-// Write to a temp file and rename, so an interrupted save never truncates a
-// good one.
-static int write_atomic(const char *path, const void *data, size_t size) {
-    char tmp[600];
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) return -1;
-    size_t w = fwrite(data, 1, size, f);
-    if (fflush(f) != 0 || fsync(fileno(f)) != 0 || w != size) {
-        fclose(f);
-        unlink(tmp);
-        return -1;
-    }
-    fclose(f);
-    if (rename(tmp, path) != 0) { unlink(tmp); return -1; }
-    return 0;
-}
-
 int game_volume_load(int fallback) {
     char path[600], buf[32], extra;
     volume_path(path, sizeof path);
@@ -77,7 +63,7 @@ int game_volume_save(int volume) {
     char path[600], buf[16];
     volume_path(path, sizeof path);
     int n = snprintf(buf, sizeof buf, "%d\n", volume);
-    return write_atomic(path, buf, (size_t)n);
+    return write_file_atomic(path, buf, (size_t)n);
 }
 
 int state_save(Core *c, int slot, char *err, size_t errlen) {
@@ -95,7 +81,7 @@ int state_save(Core *c, int slot, char *err, size_t errlen) {
     }
     char path[600];
     state_path(path, sizeof path, slot);
-    int rc = write_atomic(path, buf, size);
+    int rc = write_file_atomic(path, buf, size);
     free(buf);
     if (rc != 0) { snprintf(err, errlen, "write failed"); return -1; }
     return 0;
@@ -128,6 +114,18 @@ bool state_slot_exists(int slot) {
     state_path(path, sizeof path, slot);
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+unsigned state_slot_mask(const char *rom_path) {
+    char base[256], path[900];
+    rom_base_name(rom_path, base, sizeof base);
+    unsigned mask = 0;
+    for (int s = 0; s < MAX_STATE_SLOTS; s++) {
+        snprintf(path, sizeof path, "%s/states/%s.state%d", config_dir(), base, s);
+        struct stat st;
+        if (stat(path, &st) == 0) mask |= 1u << s;
+    }
+    return mask;
 }
 
 int sram_load(Core *c) {
@@ -165,7 +163,7 @@ int sram_save(Core *c) {
 
     char path[600];
     sram_path(path, sizeof path);
-    if (write_atomic(path, mem, size) != 0) return -1;
+    if (write_file_atomic(path, mem, size) != 0) return -1;
     if (g_sram_shadow && g_sram_shadow_size == size)
         memcpy(g_sram_shadow, mem, size);
     return 0;

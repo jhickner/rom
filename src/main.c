@@ -718,6 +718,10 @@ static const char *system_for_ext(const char *rom) {
     return i < 0 ? "" : CORES[i].sys;
 }
 
+const char *rom_system_slug(const char *rom_path) {
+    return system_for_ext(rom_path);
+}
+
 static const char *core_for_ext(const char *rom) {
     int i = core_entry_for(rom);
     return i < 0 ? NULL : CORES[i].core;
@@ -806,6 +810,7 @@ static int obtain_core(char *out, size_t cap, const char *rom, const char *exedi
 static void usage(void) {
     fprintf(stderr,
         "usage: " APP_NAME " [options] <rom>\n"
+        "  --resume        pick from the games you have been playing\n"
         "  --core <path>   libretro core to use (default: chosen by ROM extension)\n"
         "  --slot <n>      initial save-state slot (0-%d)\n"
         "  --no-audio      disable audio output\n"
@@ -1044,11 +1049,13 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
 int main(int argc, char **argv) {
     const char *rom = NULL, *core_path = NULL, *shot = NULL, *recolor_arg = NULL;
     bool want_audio = true, force = false, inline_mode = true, keys_only = false;
+    bool want_resume = false;
     int selftest = 0, scale_arg = 0;
     double strength_arg = -1.0;
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--core") && i + 1 < argc) core_path = argv[++i];
+        if (!strcmp(argv[i], "--resume")) want_resume = true;
+        else if (!strcmp(argv[i], "--core") && i + 1 < argc) core_path = argv[++i];
         else if (!strcmp(argv[i], "--slot") && i + 1 < argc) slot = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--no-audio")) want_audio = false;
         else if (!strcmp(argv[i], "--force")) force = true;
@@ -1084,6 +1091,17 @@ int main(int argc, char **argv) {
         if (*sys) printf("Platform overrides applied: %s\n\n", sys);
         config_print(&cfg, p);
         return 0;
+    }
+
+    char resume_rom[RECENT_PATH_MAX];
+    if (want_resume && !rom) {
+        int rc = recent_pick(resume_rom, sizeof resume_rom);
+        if (rc < 0) {
+            fprintf(stderr, APP_NAME ": nothing to resume yet - play a ROM first\n");
+            return 1;
+        }
+        if (rc > 0) return 0;                 // cancelled at the menu
+        rom = resume_rom;
     }
 
     if (!rom) { usage(); return 2; }
@@ -1213,6 +1231,7 @@ int main(int argc, char **argv) {
     cfg.volume = game_volume_load(cfg.volume);
     logmsg("volume: %d%% for %s", cfg.volume, state_rom_base());
     sram_load(&core);
+    recent_record(rom);
 
     term.fd = ttyfd;
     term.inline_mode = inline_mode;

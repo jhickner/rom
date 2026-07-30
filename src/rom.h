@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 #include <pthread.h>
 #include "libretro.h"
 
@@ -301,14 +302,38 @@ void   audio_flush(AudioCtx *a);
 
 void state_paths_init(const char *rom_path);
 const char *state_rom_base(void);
+// Filename without directory or extension, the name saves are keyed on.
+void rom_base_name(const char *rom_path, char *out, size_t cap);
 int  game_volume_load(int fallback);
 int  game_volume_save(int volume);
 int  state_save(Core *c, int slot, char *err, size_t errlen);
 int  state_load(Core *c, int slot, char *err, size_t errlen);
 bool state_slot_exists(int slot);
+// Bit N set means slot N holds a state for `rom_path`. Independent of the
+// paths state_paths_init established, so it can be asked about other games.
+unsigned state_slot_mask(const char *rom_path);
 int  sram_load(Core *c);
 int  sram_save(Core *c);
 bool sram_dirty(Core *c);
+
+// ---------------------------------------------------------------- recent
+
+#define MAX_RECENT 40
+#define RECENT_PATH_MAX 1024
+
+typedef struct {
+    char   path[RECENT_PATH_MAX];
+    char   base[256];       // display name: filename without the extension
+    time_t played;
+} RecentEntry;
+
+// Moves `rom_path` to the head of the played-games list.
+void recent_record(const char *rom_path);
+// Newest first. Entries whose file has since disappeared are left out.
+int  recent_load(RecentEntry *out, int cap);
+// Interactive picker on the terminal. Writes the chosen path to `out` and
+// returns 0; 1 if the user cancelled, -1 if there is nothing to resume.
+int  recent_pick(char *out, size_t cap);
 
 // ---------------------------------------------------------------- terminal
 
@@ -337,5 +362,9 @@ bool term_probe_graphics(int fd);
 double now_sec(void);
 const char *config_dir(void);
 int  ensure_dir(const char *path);
+int  write_file_atomic(const char *path, const void *data, size_t size);
+// System slug for a ROM's extension, "" when unrecognised. Lives in main.c
+// alongside the core table.
+const char *rom_system_slug(const char *rom_path);
 
 #endif
