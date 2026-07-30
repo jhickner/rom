@@ -102,7 +102,11 @@ int core_fetch(const CoreSpec *spec, char *out, size_t cap) {
         char url[512];
         snprintf(url, sizeof url, "https://github.com/%s", spec->repo);
         printf("Cloning %s\n\n", url);
-        char *argv[] = { "git", "clone", "--depth", "1", url, srcdir, NULL };
+        // Some cores keep libretro-common as a submodule and will not link
+        // without it; recursing is a no-op for the ones that do not.
+        char *argv[] = { "git", "clone", "--depth", "1",
+                         "--recurse-submodules", "--shallow-submodules",
+                         url, srcdir, NULL };
         if (run(NULL, argv) != 0) {
             fprintf(stderr, "\n" APP_NAME ": clone failed\n");
             return -1;
@@ -141,5 +145,21 @@ int core_fetch(const CoreSpec *spec, char *out, size_t cap) {
     snprintf(out, cap, "%s/%s", coresdir, spec->core);
     if (copy_file(artifact, out) != 0) return -1;
     printf("\nInstalled %s\n", out);
+
+    // Some cores refuse to start without a data file next to them; prboom
+    // needs its own prboom.wad in the system directory.
+    if (spec->datafile) {
+        char from[2304], to[2304];
+        const char *base = strrchr(spec->datafile, '/');
+        base = base ? base + 1 : spec->datafile;
+        snprintf(from, sizeof from, "%s/%s", builddir, spec->datafile);
+        snprintf(to, sizeof to, "%s/%s", config_dir(), base);
+        if (copy_file(from, to) != 0) {
+            fprintf(stderr, APP_NAME ": could not install %s, which the core "
+                            "needs to start\n", base);
+            return -1;
+        }
+        printf("Installed %s\n", to);
+    }
     return 0;
 }

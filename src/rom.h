@@ -55,8 +55,20 @@ enum {
     HK_QUIT, HK_PAUSE, HK_RESET, HK_SAVE_STATE, HK_LOAD_STATE,
     HK_SLOT_NEXT, HK_SLOT_PREV, HK_FAST_FORWARD, HK_MUTE, HK_STATS,
     HK_RECOLOR, HK_VOL_UP, HK_VOL_DOWN, HK_SCALE_UP, HK_SCALE_DOWN,
+    HK_TERM_SCALE,
     HK_COUNT
 };
+
+// Core options are passed straight through to the core, so the names and
+// values are whatever that core documents. rom never interprets them.
+#define MAX_CORE_OPTIONS 32
+#define CORE_OPT_KEY_MAX 64
+#define CORE_OPT_VAL_MAX 64
+
+typedef struct {
+    char key[CORE_OPT_KEY_MAX];
+    char val[CORE_OPT_VAL_MAX];
+} CoreOption;
 
 typedef struct {
     uint32_t pad[16];        // indexed by RETRO_DEVICE_ID_JOYPAD_*
@@ -68,9 +80,21 @@ typedef struct {
     int      recolor;          // RECOLOR_*
     double   recolor_strength; // 0..1 blend against the original colours
     int      scale;            // default integer zoom for inline mode
+    bool     term_scale;       // terminal stretches the image; false upscales
+                               // here instead, at scale^2 the bytes on the wire
+    bool     async_readback;   // hw cores: overlap GPU readback with emulation
+                               // at the cost of one frame of input latency
+    CoreOption core_opt[MAX_CORE_OPTIONS];
+    int        n_core_opt;
 } Config;
 
 void config_defaults(Config *c);
+// Adds or replaces a core option. Returns -1 when the table is full.
+int  config_set_core_option(Config *c, const char *key, const char *val);
+// Applies a "key=value key=value" string, as carried by a CoreSpec.
+void config_apply_core_options(Config *c, const char *spec);
+// Value for `key`, or NULL when unset.
+const char *config_core_option(const Config *c, const char *key);
 // `system` is a slug like "snes" or "gb"; sections suffixed with it (e.g.
 // [options.gb]) are applied on top of the unsuffixed ones. NULL for none.
 int  config_load(Config *c, const char *path, const char *system);
@@ -123,6 +147,9 @@ typedef struct {
     const char *subdir;    // directory within the repo to build in, or NULL
     const char *makefile;  // -f argument, or NULL for the default Makefile
     const char *makeargs[3];  // extra make arguments, NULL terminated
+    const char *defopts;   // "key=value key=value" core options, or NULL
+    const char *datafile;  // build-dir file the core needs in the system
+                           // directory (prboom.wad), or NULL
 } CoreSpec;
 
 // Clones the core's repo under the config dir, builds it, and installs the
@@ -204,9 +231,11 @@ typedef struct {
     size_t   cap[RB_COUNT];
     int      w[RB_COUNT], h[RB_COUNT];
     int      ready, busy, writing;
+    int      last;              // newest submitted buffer, -1 before the first
 
     Layout layout;
     bool   layout_dirty;
+    bool   status_only;         // image unchanged; only the text needs redrawing
 
     char status[256];
     char osd[OSD_MSG_MAX];
@@ -215,6 +244,12 @@ typedef struct {
 
     int  ttyfd;
     unsigned long long sent, dropped;
+    unsigned long long skipped;    // identical frames never retransmitted
+    unsigned long long bytes;      // total transmitted, for the stats line
+    double write_sec;              // cumulative time blocked in write()
+    // Rows that actually differ from the frame before, summed over transmitted
+    // frames. Measures the headroom a damage-region update scheme would have.
+    unsigned long long rows_changed, rows_total;
 } Renderer;
 
 int  renderer_start(Renderer *r, int ttyfd);

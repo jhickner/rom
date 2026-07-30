@@ -10,8 +10,50 @@
 static const char b64t[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+#if defined(__aarch64__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+
+// 48 input bytes to 64 output bytes a pass. vqtbl4q_u8 indexes the whole
+// 64-byte alphabet in one instruction, so the 6-bit groups turn into ASCII
+// without the usual branchless offset ladder.
+static size_t b64enc_bulk(const unsigned char *in, size_t n, char *out,
+                          size_t *io) {
+    uint8x16x4_t tbl;
+    tbl.val[0] = vld1q_u8((const uint8_t *)b64t);
+    tbl.val[1] = vld1q_u8((const uint8_t *)b64t + 16);
+    tbl.val[2] = vld1q_u8((const uint8_t *)b64t + 32);
+    tbl.val[3] = vld1q_u8((const uint8_t *)b64t + 48);
+    const uint8x16_t m3f = vdupq_n_u8(0x3f);
+
+    size_t i = 0, o = 0;
+    for (; i + 48 <= n; i += 48, o += 64) {
+        uint8x16x3_t v = vld3q_u8(in + i);
+        uint8x16x4_t q;
+        q.val[0] = vshrq_n_u8(v.val[0], 2);
+        q.val[1] = vandq_u8(vorrq_u8(vshlq_n_u8(v.val[0], 4),
+                                     vshrq_n_u8(v.val[1], 4)), m3f);
+        q.val[2] = vandq_u8(vorrq_u8(vshlq_n_u8(v.val[1], 2),
+                                     vshrq_n_u8(v.val[2], 6)), m3f);
+        q.val[3] = vandq_u8(v.val[2], m3f);
+
+        uint8x16x4_t r;
+        for (int k = 0; k < 4; k++) r.val[k] = vqtbl4q_u8(tbl, q.val[k]);
+        vst4q_u8((uint8_t *)out + o, r);
+    }
+    *io = o;
+    return i;
+}
+#else
+static size_t b64enc_bulk(const unsigned char *in, size_t n, char *out,
+                          size_t *io) {
+    (void)in; (void)n; (void)out;
+    *io = 0;
+    return 0;
+}
+#endif
+
 static size_t b64enc(const unsigned char *in, size_t n, char *out) {
-    size_t o = 0, i = 0;
+    size_t o = 0, i = b64enc_bulk(in, n, out, &o);
     for (; i + 2 < n; i += 3) {
         unsigned v = ((unsigned)in[i] << 16) | ((unsigned)in[i + 1] << 8) | in[i + 2];
         out[o++] = b64t[(v >> 18) & 63]; out[o++] = b64t[(v >> 12) & 63];
@@ -121,10 +163,31 @@ static void *render_thread(void *arg) {
     char osd[OSD_MSG_MAX], status[256], sbuf[512];
 
     for (;;) {
+        size_t wrote = 0;
+        double wsec = 0.0;
+
         pthread_mutex_lock(&r->m);
-        while (r->ready < 0 && r->running)
+        while (r->ready < 0 && !r->status_only && r->running)
             pthread_cond_wait(&r->cv, &r->m);
         if (!r->running) { pthread_mutex_unlock(&r->m); break; }
+
+        // Nothing new to draw: refresh the text under the image and go back to
+        // sleep, leaving the picture the terminal already has in place.
+        if (r->ready < 0) {
+            r->status_only = false;
+            Layout l = r->layout;
+            double now = now_sec();
+            snprintf(osd, sizeof osd, "%s", r->osd_until > now ? r->osd : "");
+            snprintf(status, sizeof status, "%s", r->show_status ? r->status : "");
+            pthread_mutex_unlock(&r->m);
+
+            pthread_mutex_lock(&r->wm);
+            draw_status(&l, sbuf, sizeof sbuf, osd, status);
+            (void)writeall(r->ttyfd, sbuf, strlen(sbuf));
+            pthread_mutex_unlock(&r->wm);
+            continue;
+        }
+        r->status_only = false;
 
         int idx = r->ready;
         r->ready = -1;
@@ -159,16 +222,23 @@ static void *render_thread(void *arg) {
 
         size_t blen = b64enc(src, raw, b64);
         size_t n = build_frame(msg, b64, blen, w, h, &l);
+        double w0 = now_sec();
         if (writeall(r->ttyfd, msg, n) == 0) {
+            wrote = n;
             draw_status(&l, sbuf, sizeof sbuf, osd, status);
-            (void)writeall(r->ttyfd, sbuf, strlen(sbuf));
+            size_t sn = strlen(sbuf);
+            (void)writeall(r->ttyfd, sbuf, sn);
+            wrote += sn;
         }
+        wsec = now_sec() - w0;
         pthread_mutex_unlock(&r->wm);
 
     release:
         pthread_mutex_lock(&r->m);
         r->busy = -1;
         r->sent++;
+        r->bytes += wrote;
+        r->write_sec += wsec;
         pthread_cond_broadcast(&r->cv);
         pthread_mutex_unlock(&r->m);
     }
@@ -179,7 +249,7 @@ static void *render_thread(void *arg) {
 
 int renderer_start(Renderer *r, int ttyfd) {
     memset(r, 0, sizeof *r);
-    r->ready = r->busy = r->writing = -1;
+    r->ready = r->busy = r->writing = r->last = -1;
     r->ttyfd = ttyfd;
     r->running = true;
     r->layout_dirty = true;
@@ -211,6 +281,35 @@ void renderer_submit(Renderer *r, const uint8_t *rgb, int w, int h) {
     size_t need = (size_t)w * h * 3;
     pthread_mutex_lock(&r->m);
 
+    // The terminal keeps the placement, so an identical frame is already on
+    // screen and re-sending it costs a full base64 pass and a ~200KB write for
+    // nothing. The newest submission is always either displayed or still
+    // queued, so it is the right thing to compare against. A layout change
+    // invalidates that and has to go out in full.
+    if (r->last >= 0 && !r->layout_dirty &&
+        r->w[r->last] == w && r->h[r->last] == h) {
+        const uint8_t *prev = r->buf[r->last];
+        if (memcmp(prev, rgb, need) == 0) {
+            r->skipped++;
+            // The clock and the OSD still move while the picture holds still.
+            r->status_only = true;
+            pthread_cond_signal(&r->cv);
+            pthread_mutex_unlock(&r->m);
+            return;
+        }
+        // Something moved. Tally which rows, to size up what a damage-region
+        // scheme could skip. Only frames already committed to a base64 pass and
+        // a full write pay for this second comparison.
+        size_t stride = (size_t)w * 3;
+        unsigned changed = 0;
+        for (int y = 0; y < h; y++)
+            if (memcmp(prev + (size_t)y * stride, rgb + (size_t)y * stride,
+                       stride) != 0)
+                changed++;
+        r->rows_changed += changed;
+        r->rows_total += (unsigned)h;
+    }
+
     int idx = -1;
     for (int i = 0; i < RB_COUNT; i++)
         if (i != r->ready && i != r->busy) { idx = i; break; }
@@ -225,6 +324,7 @@ void renderer_submit(Renderer *r, const uint8_t *rgb, int w, int h) {
     memcpy(r->buf[idx], rgb, need);
     r->w[idx] = w;
     r->h[idx] = h;
+    r->last = idx;
     if (r->ready >= 0) r->dropped++;   // replacing a frame the terminal never got
     r->ready = idx;
     pthread_cond_signal(&r->cv);

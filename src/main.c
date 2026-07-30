@@ -10,6 +10,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include "rom.h"
+#include "hwgl.h"
 
 static Core       core;
 static Config     cfg;
@@ -41,6 +42,7 @@ static int  slot;
 static int  max_send_w, max_send_h;      // cap transmitted size to the window
 static int  g_scale = 2;                 // requested integer zoom (inline mode)
 static int  g_eff_scale = 1;             // zoom actually in use after fitting
+static bool g_term_scale;                // stretch in the terminal, not here
 static uint8_t *g_zoom;                  // nearest-neighbour upscale buffer
 static size_t   g_zoom_cap;
 static FILE *logf;
@@ -161,8 +163,9 @@ static bool env_cb(unsigned cmd, void *data) {
 
     case RETRO_ENVIRONMENT_GET_VARIABLE: {
         struct retro_variable *v = data;
-        v->value = NULL;     // no overrides: cores fall back to their defaults
-        return false;
+        v->value = config_core_option(&cfg, v->key);
+        if (v->value) logmsg("core option %s = %s", v->key, v->value);
+        return v->value != NULL;   // unset options fall back to core defaults
     }
 
     case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
@@ -175,6 +178,23 @@ static bool env_cb(unsigned cmd, void *data) {
 
     case RETRO_ENVIRONMENT_GET_LANGUAGE:
         *(unsigned *)data = RETRO_LANGUAGE_ENGLISH;
+        return true;
+
+    case RETRO_ENVIRONMENT_SET_HW_RENDER: {
+        struct retro_hw_render_callback *cb = data;
+        if (!hwgl_set_callback(cb)) {
+            logmsg("hw render refused: %s", hwgl_error());
+            return false;
+        }
+        logmsg("hw render: type %u %u.%u depth=%d stencil=%d bottom_left=%d",
+               (unsigned)cb->context_type, cb->version_major, cb->version_minor,
+               (int)cb->depth, (int)cb->stencil, (int)cb->bottom_left_origin);
+        return true;
+    }
+
+    case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER:
+        if (!hwgl_available()) return false;
+        *(unsigned *)data = RETRO_HW_CONTEXT_OPENGL_CORE;
         return true;
 
     case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL:
@@ -190,21 +210,51 @@ static bool env_cb(unsigned cmd, void *data) {
     }
 }
 
-static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
-    if (!data) return;                                  // duped frame
-    if (data == RETRO_HW_FRAME_BUFFER_VALID) return;    // hw render unsupported
-
+// Converts one core frame into g_rgb. `bottom_up` sources rows in reverse,
+// which is what GL's origin convention needs; the per-row calls cost nothing
+// measurable next to the readback itself.
+static bool store_frame(const void *src, unsigned w, unsigned h, size_t pitch,
+                        unsigned pixfmt, bool bottom_up) {
     size_t need = (size_t)w * h * 3;
     if (need > g_rgb_cap) {
         uint8_t *nb = realloc(g_rgb, need);
-        if (!nb) return;
+        if (!nb) return false;
         g_rgb = nb;
         g_rgb_cap = need;
     }
-    if (video_convert(g_rgb, data, w, h, pitch, g_pixfmt, &recolor) == 0) return;
+
+    if (!bottom_up) {
+        if (video_convert(g_rgb, src, w, h, pitch, pixfmt, &recolor) == 0)
+            return false;
+    } else {
+        const uint8_t *s = src;
+        for (unsigned y = 0; y < h; y++) {
+            const uint8_t *row = s + (size_t)(h - 1 - y) * pitch;
+            if (video_convert(g_rgb + (size_t)y * w * 3, row, w, 1, pitch,
+                              pixfmt, &recolor) == 0)
+                return false;
+        }
+    }
+
     g_frame_w = (int)w;
     g_frame_h = (int)h;
     g_have_frame = true;
+    return true;
+}
+
+static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
+    if (!data) return;                                  // duped frame
+
+    if (data == RETRO_HW_FRAME_BUFFER_VALID) {
+        size_t hw_pitch;
+        bool bottom_up;
+        const uint8_t *px = hwgl_read(w, h, &hw_pitch, &bottom_up);
+        if (px)
+            store_frame(px, w, h, hw_pitch, RETRO_PIXEL_FORMAT_XRGB8888, bottom_up);
+        return;
+    }
+
+    store_frame(data, w, h, pitch, g_pixfmt, false);
 }
 
 static size_t audio_batch_cb(const int16_t *data, size_t frames) {
@@ -292,7 +342,9 @@ static void recompute_layout(void) {
         }
         l.cols = (iw + cw - 1) / cw;
         l.rows = (ih + ch - 1) / ch;
-        l.natural = !shrunk;         // exact pixel size unless we had to shrink
+        // Natural placement needs the pixels to already be at final size. When
+        // the terminal is doing the stretching we must emit c=/r= instead.
+        l.natural = !shrunk && !g_term_scale;
         l.x = 1;
         // A resize can reflow the block off the bottom; keep it on screen.
         l.y = term.inline_origin;
@@ -351,9 +403,9 @@ static void submit_frame(void) {
     int w = g_frame_w, h = g_frame_h;
     const uint8_t *src = g_rgb;
 
-    // Integer zoom is done here rather than by the terminal, so pixel art
-    // stays sharp instead of being smoothed by the GPU scaler.
-    if (g_eff_scale > 1) {
+    // Opt-in path: zoom here so pixel art stays sharp instead of being smoothed
+    // by the GPU scaler, at the cost of scale^2 more bytes down the pipe.
+    if (g_eff_scale > 1 && !g_term_scale) {
         size_t need = (size_t)w * h * 3 * g_eff_scale * g_eff_scale;
         if (need > g_zoom_cap) {
             uint8_t *nb = realloc(g_zoom, need);
@@ -490,6 +542,23 @@ static void do_hotkey(int hk) {
         logmsg("scale -> %d (effective %d)", g_scale, g_eff_scale);
         break;
     }
+    case HK_TERM_SCALE: {
+        g_term_scale = !g_term_scale;
+        cfg.term_scale = g_term_scale;
+        // Switching changes whether c=/r= is sent, so the terminal is holding a
+        // stale image id; force a redraw through the normal relayout path.
+        recompute_layout();
+        if (!term.inline_mode)
+            osd("term scale: %s (inline mode only)", g_term_scale ? "on" : "off");
+        else if (g_eff_scale == 1)
+            osd("term scale: %s (no effect at 1x)", g_term_scale ? "on" : "off");
+        else
+            osd("term scale: %s (%s, %dx bytes)", g_term_scale ? "on" : "off",
+                g_term_scale ? "smoothed" : "sharp",
+                g_term_scale ? 1 : g_eff_scale * g_eff_scale);
+        logmsg("term_scale -> %d (eff_scale %d)", (int)g_term_scale, g_eff_scale);
+        break;
+    }
     case HK_STATS:
         cfg.show_stats = !cfg.show_stats;
         pthread_mutex_lock(&rend.m);
@@ -578,24 +647,51 @@ static void on_fatal(int sig) {
 // Linking the system zlib sidesteps it; LIBS is spelled out so the build does
 // not need pkg-config.
 #define PCE_ARGS    { "SYSTEM_ZLIB=1", "LIBS=-lz" }
+// mupen64plus-next bundles zlib and libpng, both of which take their
+// classic-Mac-OS branch when the SDK defines TARGET_OS_MAC: zlib redefines
+// fdopen, and libpng reaches for <fp.h>. Defining fdopen leaves zlib's
+// `#ifndef fdopen` guard satisfied, and __cmath__ is the one guard libpng
+// checks that Apple's headers do not also use, so math.h keeps working; it
+// then has to be force-included because pngpriv.h skips it on that branch.
+// C only - __cmath__ would collide with libc++.
+#define N64_ARGS    { "CC=cc -Dfdopen=fdopen -D__cmath__=1 -include math.h" }
+// ECWolf bundles the same zlib, and needs the same fdopen guard satisfied.
+#define ECWOLF_ARGS { "CC=cc -Dfdopen=fdopen" }
 #else
 #define MGBA_ARGS   { NULL }
 #define PCE_ARGS    { NULL }
+#define N64_ARGS    { NULL }
+#define ECWOLF_ARGS { NULL }
 #endif
+
+// GLideN64, the core's default renderer, corrupts its texture cache and
+// aborts a few seconds into a game on macOS/arm64. Angrylion renders in
+// software instead, which the terminal downscales away anyway. Override it
+// with `rdp-plugin` under [core.n64] to try the GL renderer.
+#define N64_OPTS    "mupen64plus-rdp-plugin=angrylion"
+
 
 static const CoreSpec CORES[] = {
     { "sfc smc fig", "snes",    "snes9x_libretro" CORE_EXT,
-      "libretro/snes9x",                   "libretro", NULL, { NULL } },
+      "libretro/snes9x",                   "libretro", NULL, { NULL }, NULL, NULL },
     { "gba",         "gba",     "mgba_libretro" CORE_EXT,
-      "libretro/mgba",                     NULL, "Makefile.libretro", MGBA_ARGS },
+      "libretro/mgba",                     NULL, "Makefile.libretro", MGBA_ARGS, NULL, NULL },
     { "nes",         "nes",     "fceumm_libretro" CORE_EXT,
-      "libretro/libretro-fceumm",          NULL, NULL, { NULL } },
+      "libretro/libretro-fceumm",          NULL, NULL, { NULL }, NULL, NULL },
     { "gb gbc",      "gb",      "gambatte_libretro" CORE_EXT,
-      "libretro/gambatte-libretro",        NULL, NULL, { NULL } },
+      "libretro/gambatte-libretro",        NULL, NULL, { NULL }, NULL, NULL },
     { "md gen smd",  "genesis", "genesis_plus_gx_libretro" CORE_EXT,
-      "libretro/Genesis-Plus-GX",          NULL, "Makefile.libretro", { NULL } },
+      "libretro/Genesis-Plus-GX",          NULL, "Makefile.libretro", { NULL }, NULL, NULL },
     { "pce",         "pce",     "mednafen_pce_fast_libretro" CORE_EXT,
-      "libretro/beetle-pce-fast-libretro", NULL, NULL, PCE_ARGS },
+      "libretro/beetle-pce-fast-libretro", NULL, NULL, PCE_ARGS, NULL, NULL },
+    { "n64 z64 v64", "n64",     "mupen64plus_next_libretro" CORE_EXT,
+      "libretro/mupen64plus-libretro-nx",  NULL, NULL, N64_ARGS, N64_OPTS, NULL },
+    { "wad",         "doom",    "prboom_libretro" CORE_EXT,
+      "libretro/libretro-prboom",          NULL, NULL, { NULL }, NULL,
+      "prboom.wad" },
+    { "wl6 wl1 sod sdm n3d ecwolf", "wolf3d", "ecwolf_libretro" CORE_EXT,
+      "libretro/ecwolf",                   "src/libretro", NULL, ECWOLF_ARGS,
+      NULL, NULL },
 };
 #define NCORES ((int)(sizeof CORES / sizeof CORES[0]))
 
@@ -765,9 +861,77 @@ static int write_bmp(const char *path, const uint8_t *rgb, int w, int h) {
     return 0;
 }
 
+static void hw_target_size(unsigned *w, unsigned *h) {
+    *w = core.av.geometry.max_width  ? core.av.geometry.max_width
+                                     : core.av.geometry.base_width;
+    *h = core.av.geometry.max_height ? core.av.geometry.max_height
+                                     : core.av.geometry.base_height;
+}
+
+// A core announces hw rendering while it loads, so the context can only be
+// built once the game is in. It has to exist, and context_reset has to have
+// run, before the first retro_run.
+static int hw_start(void) {
+    if (!hwgl_requested()) return 0;
+    unsigned w, h;
+    hw_target_size(&w, &h);
+    hwgl_set_async(cfg.async_readback);
+    if (hwgl_init(w, h) != 0) {
+        errmsg(APP_NAME ": offscreen GL setup failed: %s\n", hwgl_error());
+        logmsg("hw render init failed: %s", hwgl_error());
+        return -1;
+    }
+    logmsg("hw render context: %s", hwgl_info());
+    logmsg("hw readback: %s", hwgl_async_active() ? "async (pixel buffers)"
+                                                  : "blocking");
+    hwgl_notify_reset();
+    logmsg("hw render ready: %ux%u offscreen target", w, h);
+    return 0;
+}
+
+static void hw_bind_frame(void) {
+    if (!hwgl_requested()) return;
+    unsigned w, h;
+    hw_target_size(&w, &h);
+    hwgl_bind(w, h);
+}
+
+// AArch64 requires a callee to preserve v8-v15, but libco's aarch64
+// co_switch - which mupen64plus-next and other cores use to run the emulator
+// on its own stack - saves only the general-purpose registers. Whatever the
+// compiler parked in d8-d15 is gone once retro_run returns, which quietly
+// zeroes the frame pacing clocks. Stash them across the call.
+#if defined(__aarch64__)
+#define FP_GUARD_SAVE(buf) __asm__ volatile(        \
+        "stp d8,  d9,  [%0]\n"                      \
+        "stp d10, d11, [%0, #16]\n"                 \
+        "stp d12, d13, [%0, #32]\n"                 \
+        "stp d14, d15, [%0, #48]\n"                 \
+        :: "r"(buf) : "memory")
+#define FP_GUARD_RESTORE(buf) __asm__ volatile(     \
+        "ldp d8,  d9,  [%0]\n"                      \
+        "ldp d10, d11, [%0, #16]\n"                 \
+        "ldp d12, d13, [%0, #32]\n"                 \
+        "ldp d14, d15, [%0, #48]\n"                 \
+        :: "r"(buf) : "memory", "d8", "d9", "d10", "d11", "d12", "d13", "d14", "d15")
+#else
+#define FP_GUARD_SAVE(buf)    ((void)(buf))
+#define FP_GUARD_RESTORE(buf) ((void)(buf))
+#endif
+
+static void core_run_frame(void) {
+    uint64_t fpsave[8];
+    hw_bind_frame();
+    FP_GUARD_SAVE(fpsave);
+    core.run();
+    FP_GUARD_RESTORE(fpsave);
+}
+
 static int run_selftest(const char *core_path, const char *rom, int frames,
                         const char *shot) {
     if (core_load(&core, core_path) != 0) return 1;
+    int ci = core_entry_for(rom);
+    if (ci >= 0) config_apply_core_options(&cfg, CORES[ci].defopts);
     core.set_environment(env_cb);
     core.set_video_refresh(video_cb);
     core.set_audio_sample(audio_sample_cb);
@@ -777,6 +941,7 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
     core.init();
     if (core_load_game(&core, rom) != 0) { core_unload(&core); return 1; }
     core.set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+    if (hw_start() != 0) { core_unload(&core); return 1; }
 
     printf("core:   %s %s\n", core.sys.library_name, core.sys.library_version);
     printf("geom:   %ux%u (max %ux%u) dar=%.4f\n",
@@ -791,8 +956,11 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
     printf("state:  %zu bytes\n", core.serialize_size());
     printf("sram:   %zu bytes\n", core.get_memory_size(RETRO_MEMORY_SAVE_RAM));
 
+    if (hwgl_requested()) printf("render: hardware GL - %s\n", hwgl_info());
+    else printf("render: software\n");
+
     double t0 = now_sec();
-    for (int i = 0; i < frames; i++) core.run();
+    for (int i = 0; i < frames; i++) core_run_frame();
     double dt = now_sec() - t0;
     printf("ran %d frames in %.2fs = %.0f fps (%.1fx realtime)\n",
            frames, dt, frames / dt, frames / dt / 60.0);
@@ -815,7 +983,7 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
     void *sbuf = malloc(ssize);
     int rc = 0;
     if (sbuf && core.serialize(sbuf, ssize)) {
-        for (int i = 0; i < 60; i++) core.run();
+        for (int i = 0; i < 60; i++) core_run_frame();
         unsigned long ha = 5381;
         for (size_t i = 0; i < n; i++) ha = ha * 33 + g_rgb[i];
 
@@ -823,7 +991,7 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
             printf("state: unserialize FAILED\n");
             rc = 1;
         } else {
-            for (int i = 0; i < 60; i++) core.run();
+            for (int i = 0; i < 60; i++) core_run_frame();
             unsigned long hb = 5381;
             for (size_t i = 0; i < n; i++) hb = hb * 33 + g_rgb[i];
             printf("state: round trip %s (%lx vs %lx)\n",
@@ -891,8 +1059,10 @@ int main(int argc, char **argv) {
         ensure_dir(config_dir());
         snprintf(p, sizeof p, "%s/config", config_dir());
         config_defaults(&cfg);
-        if (!file_exists(p)) config_write_default(p);
         // Naming a ROM shows the bindings that ROM's platform would actually use.
+        int ki = core_entry_for(rom);
+        if (ki >= 0) config_apply_core_options(&cfg, CORES[ki].defopts);
+        if (!file_exists(p)) config_write_default(p);
         const char *sys = system_for_ext(rom);
         config_load(&cfg, p, sys);
         if (rom) {
@@ -950,6 +1120,8 @@ int main(int argc, char **argv) {
     char cfgpath[512];
     snprintf(cfgpath, sizeof cfgpath, "%s/config", config_dir());
     config_defaults(&cfg);
+    int core_idx = core_entry_for(rom);
+    if (core_idx >= 0) config_apply_core_options(&cfg, CORES[core_idx].defopts);
     if (!file_exists(cfgpath)) config_write_default(cfgpath);
     const char *system = system_for_ext(rom);
     config_load(&cfg, cfgpath, system);
@@ -959,7 +1131,9 @@ int main(int argc, char **argv) {
     // CLI --scale wins over the config default.
     if (scale_arg > 0) g_scale = scale_arg;
     else g_scale = cfg.scale;
-    logmsg("system: '%s', scale %d", system, g_scale);
+    g_term_scale = cfg.term_scale;
+    logmsg("system: '%s', scale %d, term_scale %d", system, g_scale,
+           (int)g_term_scale);
 
     char exedir[512];
     snprintf(exedir, sizeof exedir, "%s", argv[0]);
@@ -1010,6 +1184,12 @@ int main(int argc, char **argv) {
         return 1;
     }
     core.set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
+
+    if (hw_start() != 0) {
+        errmsg("  see %s\n", logpath);
+        core_unload(&core);
+        return 1;
+    }
 
     logmsg("core: %s %s", core.sys.library_name, core.sys.library_version);
     logmsg("av: %ux%u dar=%.4f fps=%.4f rate=%.1f",
@@ -1129,7 +1309,10 @@ int main(int argc, char **argv) {
     double paused_draw = 0;
     int frames_this_window = 0;
     double shown_fps = 0;
-    unsigned long long last_sent = 0, last_dropped = 0;
+    unsigned long long last_sent = 0, last_dropped = 0, last_bytes = 0;
+    unsigned long long last_skipped = 0;
+    unsigned long long last_rows_changed = 0, last_rows_total = 0;
+    double last_write_sec = 0;
     double sram_check = now_sec();
 
     while (running && !g_quit) {
@@ -1169,7 +1352,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        core.run();
+        core_run_frame();
         submit_frame();
         frames_this_window++;
 
@@ -1180,18 +1363,41 @@ int main(int argc, char **argv) {
 
             pthread_mutex_lock(&rend.m);
             unsigned long long sent = rend.sent, dropped = rend.dropped;
+            unsigned long long skipped = rend.skipped;
+            unsigned long long rch = rend.rows_changed, rtot = rend.rows_total;
+            unsigned long long bytes = rend.bytes;
+            double write_sec = rend.write_sec;
             pthread_mutex_unlock(&rend.m);
-            double disp_fps = (sent - last_sent) / 0.5;
+            unsigned long long sent_delta = sent - last_sent;
+            double disp_fps = sent_delta / 0.5;
             unsigned long long drop_delta = dropped - last_dropped;
+            unsigned long long skip_delta = skipped - last_skipped;
+            unsigned long long rtot_delta = rtot - last_rows_total;
+            // A transmitted frame always has at least one changed row, so no
+            // data means nothing was sent - distinct from "nothing moved".
+            char rows_buf[16] = "--";
+            if (rtot_delta)
+                snprintf(rows_buf, sizeof rows_buf, "%.0f%%",
+                         (rch - last_rows_changed) * 100.0 / rtot_delta);
+            double tx_mbs = (bytes - last_bytes) / 1048576.0 / 0.5;
+            double wr_ms = sent_delta
+                ? (write_sec - last_write_sec) * 1000.0 / sent_delta : 0.0;
             last_sent = sent;
             last_dropped = dropped;
+            last_skipped = skipped;
+            last_rows_changed = rch;
+            last_rows_total = rtot;
+            last_bytes = bytes;
+            last_write_sec = write_sec;
 
             char status[256];
             int aud_ms = audio ? (int)(audio_queued_frames(audio) * 1000.0 / rate) : -1;
             snprintf(status, sizeof status,
-                     "slot %d  core %.0f  disp %.0f%s  drop %llu  aud %dms%s",
+                     "slot %d  core %.0f  disp %.0f%s  drop %llu  skip %llu  "
+                     "aud %dms  tx %.1fMB/s  w %.1fms  rows %s%s%s",
                      slot, shown_fps, disp_fps, fast_forward ? " FF" : "",
-                     drop_delta, aud_ms, muted ? "  MUTE" : "");
+                     drop_delta, skip_delta, aud_ms, tx_mbs, wr_ms, rows_buf,
+                     g_term_scale ? "  TS" : "", muted ? "  MUTE" : "");
             renderer_set_status(&rend, status);
         }
 
@@ -1209,6 +1415,7 @@ int main(int argc, char **argv) {
     input_shutdown(&input);
     term_leave(&term);
     audio_stop(audio);
+    hwgl_shutdown();     // hands the core its context_destroy before unload
     core_unload(&core);
 
     recolor_free(&recolor);

@@ -29,7 +29,7 @@ static const char *padnames[16] = {
 static const char *hknames[HK_COUNT] = {
     "quit", "pause", "reset", "save_state", "load_state",
     "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor",
-    "volume_up", "volume_down", "scale_up", "scale_down"
+    "volume_up", "volume_down", "scale_up", "scale_down", "term_scale"
 };
 
 const char *hotkey_name(int hk) {
@@ -121,6 +121,7 @@ void config_defaults(Config *c) {
     c->hotkey[HK_SCALE_UP][1]     = '}';
     c->hotkey[HK_SCALE_DOWN][0]   = '[';
     c->hotkey[HK_SCALE_DOWN][1]   = '{';
+    c->hotkey[HK_TERM_SCALE][0]   = KEY_F9;
 
     c->volume = 100;
     c->integer_scale = false;
@@ -129,6 +130,8 @@ void config_defaults(Config *c) {
     c->recolor = RECOLOR_OFF;
     c->recolor_strength = 1.0;
     c->scale = 2;
+    c->term_scale = true;
+    c->async_readback = true;
 }
 
 static char *trim(char *s) {
@@ -202,6 +205,9 @@ static int config_pass(Config *c, const char *path, const char *system,
                     else c->hotkey[i][j++] = key;
                 }
             }
+        } else if (strcasecmp(section, "core") == 0) {
+            if (config_set_core_option(c, k, v) != 0)
+                fprintf(stderr, "config:%d: too many core options\n", lineno);
         } else if (strcasecmp(section, "options") == 0) {
             if (strcasecmp(k, "volume") == 0) c->volume = atoi(v);
             else if (strcasecmp(k, "integer_scale") == 0) c->integer_scale = parse_bool(v);
@@ -209,6 +215,8 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "pause_on_unfocus") == 0) c->pause_on_unfocus = parse_bool(v);
             else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
             else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
+            else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
+            else if (strcasecmp(k, "async_readback") == 0) c->async_readback = parse_bool(v);
             else if (strcasecmp(k, "recolor") == 0) {
                 int m = recolor_mode_from_name(v);
                 if (m < 0) fprintf(stderr, "config:%d: unknown recolor mode '%s'\n", lineno, v);
@@ -218,6 +226,39 @@ static int config_pass(Config *c, const char *path, const char *system,
     }
     fclose(f);
     return 0;
+}
+
+int config_set_core_option(Config *c, const char *key, const char *val) {
+    if (!key || !*key || !val) return -1;
+    for (int i = 0; i < c->n_core_opt; i++) {
+        if (strcmp(c->core_opt[i].key, key) != 0) continue;
+        snprintf(c->core_opt[i].val, CORE_OPT_VAL_MAX, "%s", val);
+        return 0;
+    }
+    if (c->n_core_opt >= MAX_CORE_OPTIONS) return -1;
+    CoreOption *o = &c->core_opt[c->n_core_opt++];
+    snprintf(o->key, CORE_OPT_KEY_MAX, "%s", key);
+    snprintf(o->val, CORE_OPT_VAL_MAX, "%s", val);
+    return 0;
+}
+
+void config_apply_core_options(Config *c, const char *spec) {
+    if (!spec) return;
+    char buf[512];
+    snprintf(buf, sizeof buf, "%s", spec);
+    for (char *tok = strtok(buf, " "); tok; tok = strtok(NULL, " ")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq = 0;
+        config_set_core_option(c, tok, eq + 1);
+    }
+}
+
+const char *config_core_option(const Config *c, const char *key) {
+    if (!key) return NULL;
+    for (int i = 0; i < c->n_core_opt; i++)
+        if (strcmp(c->core_opt[i].key, key) == 0) return c->core_opt[i].val;
+    return NULL;
 }
 
 int config_load(Config *c, const char *path, const char *system) {
@@ -253,7 +294,7 @@ void config_print(const Config *c, const char *path) {
         "Quit", "Pause", "Reset", "Save state", "Load state",
         "Next slot", "Previous slot", "Fast-forward (hold)", "Mute",
         "Toggle status line", "Cycle recolor mode", "Volume up", "Volume down",
-        "Scale up", "Scale down"
+        "Scale up", "Scale down", "Toggle terminal scale"
     };
 
     printf("Game\n");
@@ -279,10 +320,18 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %d\n", "volume", c->volume);
     printf("  %-22s %d\n", "scale", c->scale);
     printf("  %-22s %s\n", "integer_scale", c->integer_scale ? "true" : "false");
+    printf("  %-22s %s\n", "term_scale", c->term_scale ? "true" : "false");
+    printf("  %-22s %s\n", "async_readback", c->async_readback ? "true" : "false");
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
     printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
     printf("  %-22s %.2f\n", "recolor_strength", c->recolor_strength);
+
+    if (c->n_core_opt > 0) {
+        printf("\nCore options\n");
+        for (int i = 0; i < c->n_core_opt; i++)
+            printf("  %-38s %s\n", c->core_opt[i].key, c->core_opt[i].val);
+    }
 
     if (path) printf("\nEdit %s to rebind.\n", path);
 }
@@ -315,13 +364,30 @@ int config_write_default(const char *path) {
     fprintf(f, "show_stats       = %s\n", c.show_stats ? "true" : "false");
     fprintf(f, "pause_on_unfocus = %s\n", c.pause_on_unfocus ? "true" : "false");
     fprintf(f, "scale            = %d          # inline-mode integer zoom, 1-8\n", c.scale);
+    fprintf(f, "# term_scale: the terminal stretches the image to the cell rect. Set false to\n"
+               "# upscale here instead, which keeps pixel art blocky rather than letting the\n"
+               "# terminal's scaler smooth it, at the cost of transmitting scale^2 more bytes.\n");
+    fprintf(f, "term_scale       = %s\n", c.term_scale ? "true" : "false");
+    fprintf(f, "# async_readback: for cores that render on the GPU (N64), overlap the frame\n"
+               "# readback with emulation instead of stalling on it. Adds one frame of input\n"
+               "# latency. No effect on software-rendered cores.\n");
+    fprintf(f, "async_readback   = %s\n", c.async_readback ? "true" : "false");
     fprintf(f, "# recolor: off | hue | nearest | duotone | dither\n");
     fprintf(f, "recolor          = %s\n", recolor_mode_name(c.recolor));
     fprintf(f, "recolor_strength = %.2f\n", c.recolor_strength);
     fprintf(f,
         "\n"
+        "# [core] passes libretro core options straight through. Names and\n"
+        "# values are the core's own; anything left out keeps the core's\n"
+        "# default. Suffix per system, as below.\n"
+        "#\n"
+        "# [core.n64]\n"
+        "# mupen64plus-rdp-plugin = angrylion   # rom's default; gliden64 to\n"
+        "#                                      # try the GL renderer\n");
+    fprintf(f,
+        "\n"
         "# Per-platform overrides: suffix any section with a system name.\n"
-        "# Systems: snes nes gb gba genesis pce\n"
+        "# Systems: snes nes gb gba genesis pce n64 doom wolf3d\n"
         "# These are applied on top of the sections above, whatever the order.\n"
         "#\n"
         "# [options.gb]\n"

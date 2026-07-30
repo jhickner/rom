@@ -86,6 +86,37 @@ Use `--core <path>` to select one directly.
 | `.gba` | `mgba_libretro` |
 | `.md` `.gen` `.smd` | `genesis_plus_gx_libretro` |
 | `.pce` | `mednafen_pce_fast_libretro` |
+| `.n64` `.z64` `.v64` | `mupen64plus_next_libretro` |
+| `.wad` | `prboom_libretro` |
+| `.wl6` `.wl1` `.sod` `.sdm` `.n3d` | `ecwolf_libretro` |
+
+Cores that render with OpenGL are supported on macOS: `rom` creates an
+offscreen 4.1 core-profile context through CGL (Metal-backed on Apple
+silicon), lets the core draw into an FBO, and reads each frame back into the
+normal video path. Nothing is ever presented to a window.
+
+N64 defaults to Mupen64Plus-Next's Angrylion renderer rather than its GL one.
+GLideN64 corrupts its texture cache and aborts a few seconds into a game on
+macOS/arm64, and at terminal resolutions the software renderer looks the same.
+Set `mupen64plus-rdp-plugin = gliden64` under `[core.n64]` to try it anyway.
+
+This fork of prboom plays Heretic and Hexen as well as Doom, detecting which
+from the IWAD's lump table. Verified working: `doom.wad`, `doom1.wad`,
+`doom2.wad`, `doom2f.wad`, `doomu.wad`, `tnt.wad`, `plutonia.wad`,
+`heretic.wad`, `heretic1.wad`, `hexen.wad`, `hexendemo.wad`.
+
+Not working: Strife (`strife0.wad`, `strife1.wad`) hangs the core, and
+`hexdd.wad` and `voices.wad` crash it - the first is a Hexen expansion and the
+second is Strife's speech pack, neither of which is a standalone game. Chex
+Quest (`chex.wad`, `chex3.wad`) ships as PWADs, which are patches that need a
+base IWAD loaded underneath; rom passes one file to the core, so they are
+rejected.
+
+Fetching the core also installs `prboom.wad`, the core's own data file, into
+`~/.config/rom/`.
+
+Wolfenstein takes any of the game's data files, e.g. `VSWAP.WL1`; ECWolf finds
+its siblings in the same directory and carries its `ecwolf.pk3` internally.
 
 ## Usage
 
@@ -127,8 +158,30 @@ image when the game exits.
 | Tab | Fast-forward while held |
 | F8 | Cycle recolor mode |
 | `[` / `]` | Scale down / up (inline mode) |
+| F9 | Toggle terminal scaling (see below) |
 | `-` / `=` | Volume down / up |
 | `m` | Mute |
+
+## Scaling
+
+By default the terminal stretches the image to its cell rect, so only one
+native-resolution frame goes down the pipe no matter what zoom you pick. Set
+`term_scale = false` to zoom locally instead, which keeps pixel art blocky
+rather than letting the terminal's scaler smooth it — at the cost of
+transmitting scale² more bytes per frame. Press F9 to compare while playing.
+
+The write to the terminal dominates the render path, so the difference is
+large: at 3x zoom local zooming sends 2020 KB/frame against 225 KB, and at 4x
+it alone caps the render thread near 60fps.
+
+## GPU readback
+
+Cores that render on the GPU (N64) have their frame read back off the GPU each
+frame. By default that transfer is queued and collected on the next frame, so it
+overlaps emulation instead of stalling it — roughly 3x cheaper at 640x480, more
+at higher internal resolutions. The cost is one frame of input latency; set
+`async_readback = false` to read synchronously instead. Software-rendered cores
+are unaffected either way.
 
 ## Terminal colors
 
@@ -153,6 +206,8 @@ volume, scale, recoloring, or focus behavior.
 ```ini
 [options]
 scale            = 2
+term_scale       = true
+async_readback   = true
 recolor          = hue
 recolor_strength = 1.00
 pause_on_unfocus = true
@@ -161,9 +216,18 @@ pause_on_unfocus = true
 scale = 4
 ```
 
-Sections may be suffixed with `snes`, `nes`, `gb`, `gba`, `genesis`, or `pce`
-for system-specific overrides. Run `rom --keys <rom>` to see the effective
-settings. Volume changes are remembered separately for each ROM; the configured
+Sections may be suffixed with `snes`, `nes`, `gb`, `gba`, `genesis`, `pce`,
+`n64`, `doom`, or `wolf3d` for system-specific overrides. Run
+`rom --keys <rom>` to see the effective settings.
+
+A `[core]` section passes libretro core options through untouched. The names
+and values belong to the core, not to `rom`; anything you leave out keeps the
+core's own default.
+
+```ini
+[core.n64]
+mupen64plus-rdp-plugin = angrylion
+``` Volume changes are remembered separately for each ROM; the configured
 volume is the initial default.
 
 | Path | Contents |
@@ -180,8 +244,8 @@ are written atomically and SRAM is autosaved every five seconds when changed.
 
 - macOS (CoreAudio) or Linux (ALSA)
 - Ghostty or kitty required
-- Software-rendered cores only; no GL or Vulkan cores
+- GL cores on macOS only; Linux is software-rendered until an EGL backend lands
+- No Vulkan cores
 - Player 1 keyboard input only
-- Core options use their defaults
 
 Licensed under the [MIT License](LICENSE).
