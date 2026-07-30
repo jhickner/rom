@@ -265,6 +265,35 @@ void renderer_set_osd(Renderer *r, const char *s, double seconds);
 void renderer_lock_tty(Renderer *r);
 void renderer_unlock_tty(Renderer *r);
 
+// ---------------------------------------------------------------- graphics
+
+// Under tmux the image cannot be placed at the cursor: tmux neither tracks nor
+// redraws it. The way through is the kitty protocol's Unicode placeholders -
+// ordinary text cells carrying the image id, which tmux moves and redraws
+// like any other text - with every graphics escape wrapped in a tmux DCS.
+
+// Under 2^24 with no zero byte, so a truecolor foreground carries it whole.
+#define GFX_IMAGE_ID 0x0A5F31
+
+// Reads $TMUX once. Call before anything is written to the terminal.
+void gfx_init(void);
+// True when escapes need tmux wrapping and the image needs placeholder cells.
+bool gfx_tmux(void);
+// True when tmux will forward our escapes to the terminal it is running in.
+bool gfx_passthrough_ok(void);
+// Appends one graphics APC escape: `head` is the control data, `payload` the
+// base64 body (omitted when `plen` is 0). Returns bytes written.
+size_t gfx_apc(char *out, const char *head, const char *payload, size_t plen);
+// Upper bound on what gfx_apc writes for a `plen`-byte payload.
+size_t gfx_apc_max(size_t plen);
+// Drops our image from the terminal.
+void gfx_delete_image(int fd);
+// Lays down the placeholder cells for `l`. Render thread only: it reuses one
+// internal buffer.
+void gfx_write_placeholders(int fd, const Layout *l);
+// Prebuilt terminal-restoring escapes, for the fatal signal handler to write.
+const char *gfx_restore_seq(size_t *len);
+
 // ---------------------------------------------------------------- input
 
 typedef struct {

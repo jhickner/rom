@@ -36,6 +36,14 @@ static bool      g_geom_dirty;
 
 static bool held_ascii[256];
 static bool held_spec[KEY_MAX_ - 0xE000];
+// Last time each key was seen, for the inferred-release path below.
+static double seen_ascii[256];
+static double seen_spec[KEY_MAX_ - 0xE000];
+static bool   g_infer_release;
+// How long a key stays held after its last byte. Auto-repeat arrives every
+// 30-50ms, so this bridges the gap between repeats without outlasting a tap by
+// much.
+#define HELD_LINGER 0.15
 
 static bool user_paused, focus_paused, muted, fast_forward, running = true;
 static int  slot;
@@ -76,6 +84,25 @@ static bool *held_slot(uint32_t k) {
     if (k < 256) return &held_ascii[k];
     if (k >= 0xE000 && k < KEY_MAX_) return &held_spec[k - 0xE000];
     return NULL;
+}
+
+static double *seen_slot(uint32_t k) {
+    if (k < 256) return &seen_ascii[k];
+    if (k >= 0xE000 && k < KEY_MAX_) return &seen_spec[k - 0xE000];
+    return NULL;
+}
+
+// Without the kitty keyboard protocol - tmux 3.5 does not carry it - a key
+// press arrives but its release never does, so a held key would stick forever.
+// What does arrive is auto-repeat, so treat a key as held until the repeats
+// stop. The cost is that holding a direction hiccups once at the start, while
+// the keyboard waits out its delay-until-repeat.
+static void expire_held(void) {
+    double cut = now_sec() - HELD_LINGER;
+    for (size_t i = 0; i < sizeof held_ascii; i++)
+        if (held_ascii[i] && seen_ascii[i] < cut) held_ascii[i] = false;
+    for (size_t i = 0; i < sizeof held_spec; i++)
+        if (held_spec[i] && seen_spec[i] < cut) held_spec[i] = false;
 }
 
 static bool key_held(uint32_t k) {
@@ -599,14 +626,27 @@ static void handle_input(void) {
         }
 
         // Held state ignores modifiers so game input is unaffected by them.
-        bool *slotp = held_slot(ev[i].key & KEY_BASE_MASK);
+        uint32_t base = ev[i].key & KEY_BASE_MASK;
+        bool *slotp = held_slot(base);
+        bool was_held = slotp && *slotp;
         if (slotp) *slotp = ev[i].pressed;
 
-        if (ev[i].pressed && !ev[i].repeat) {
+        bool repeat = ev[i].repeat;
+        if (g_infer_release && ev[i].pressed) {
+            double *seen = seen_slot(base);
+            if (seen) *seen = now_sec();
+            // A byte for a key we still consider held is auto-repeat, not a
+            // second press - otherwise holding a hotkey would fire it over and
+            // over.
+            if (was_held) repeat = true;
+        }
+
+        if (ev[i].pressed && !repeat) {
             int hk = hotkey_for(ev[i].key);
             if (hk >= 0) do_hotkey(hk);
         }
     }
+    if (g_infer_release) expire_held();
     fast_forward = hotkey_held(HK_FAST_FORWARD);
 }
 
@@ -623,11 +663,12 @@ static void on_winch(int sig) {
 }
 
 // Restores the terminal without touching anything unsafe, then re-raises so
-// the real signal disposition still applies.
+// the real signal disposition still applies. The escapes were assembled at
+// startup: building them here would mean formatting inside a signal handler.
 static void on_fatal(int sig) {
-    const char *restore =
-        "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[<u\x1b[?25h\x1b[?1049l";
-    (void)!write(term.fd, restore, strlen(restore));
+    size_t rlen = 0;
+    const char *restore = gfx_restore_seq(&rlen);
+    (void)!write(term.fd, restore, rlen);
     struct termios t;
     if (tcgetattr(term.fd, &t) == 0) {
         t.c_lflag |= (ECHO | ICANON | ISIG);
@@ -1047,6 +1088,7 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
 // --------------------------------------------------------------------- main
 
 int main(int argc, char **argv) {
+    gfx_init();
     const char *rom = NULL, *core_path = NULL, *shot = NULL, *recolor_arg = NULL;
     bool want_audio = true, force = false, inline_mode = true, keys_only = false;
     bool want_resume = false;
@@ -1253,25 +1295,36 @@ int main(int argc, char **argv) {
 
     // Nothing can be drawn without the graphics protocol, so bail before we
     // start writing image data at a terminal that would only render it as
-    // garbage. Detection relies on the terminal answering a query, which tmux
-    // swallows even when the outer terminal supports it.
-    if (!term_probe_graphics(ttyfd) && !force) {
+    // garbage. Under tmux there is nothing to ask: tmux answers the query
+    // itself and never forwards the terminal's reply, so the check there is
+    // that passthrough is enabled, without which every escape is eaten.
+    bool ok = gfx_tmux() ? gfx_passthrough_ok() : term_probe_graphics(ttyfd);
+    if (!ok && !force) {
         term_leave(&term);
-        errmsg(
-            APP_NAME ": this terminal did not acknowledge the kitty graphics protocol.\n"
-            "\n"
-            "  * Use Ghostty or kitty.\n"
-            "  * Run outside tmux, which does not forward the protocol's replies,\n"
-            "    so detection fails even when the outer terminal supports it.\n"
-            "  * If you are certain your terminal supports it, pass --force.\n"
-            "\n"
-            "To exercise emulation without a terminal:\n"
-            "  " APP_NAME " --selftest 900 --shot out.bmp <rom>\n");
+        if (gfx_tmux())
+            errmsg(
+                APP_NAME ": tmux is not forwarding escapes to your terminal.\n"
+                "\n"
+                "  tmux set -g allow-passthrough all\n"
+                "\n"
+                "  Add it to ~/.tmux.conf to make it stick. The terminal running\n"
+                "  tmux still has to be Ghostty or kitty.\n");
+        else
+            errmsg(
+                APP_NAME ": this terminal did not acknowledge the kitty graphics protocol.\n"
+                "\n"
+                "  * Use Ghostty or kitty.\n"
+                "  * If you are certain your terminal supports it, pass --force.\n"
+                "\n"
+                "To exercise emulation without a terminal:\n"
+                "  " APP_NAME " --selftest 900 --shot out.bmp <rom>\n");
         close(ttyfd);
         core_unload(&core);
         if (logf) fclose(logf);
         return 1;
     }
+    logmsg("graphics: %s", gfx_tmux() ? "tmux passthrough, unicode placeholders"
+                                      : "direct placement");
 
     // Claim our block of the scrollback before anything else draws, so the
     // origin we compute stays valid.
@@ -1287,6 +1340,9 @@ int main(int argc, char **argv) {
     }
 
     int kbd = input_init(&input, ttyfd);
+    g_infer_release = !input.kitty_kbd;
+    logmsg("keyboard: %s", input.kitty_kbd ? "kitty protocol, real releases"
+                                           : "inferred releases from repeat");
 
     // Grouped with the other startup probes: these queries have read windows
     // that would swallow keystrokes if run once the game is underway.
@@ -1317,7 +1373,8 @@ int main(int argc, char **argv) {
 
     if (kbd != 0)
         renderer_set_osd(&rend,
-            "no kitty keyboard protocol: keys will stick - run outside tmux", 6.0);
+            "no key-release reporting here: holding a key leans on auto-repeat",
+            6.0);
     else
         osd("%s  |  ^C quit  F2 save  F3 load  Tab fast-forward",
             core.sys.library_name ? core.sys.library_name : "core");

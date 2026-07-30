@@ -78,9 +78,9 @@ int term_resize_inline(Term *t, int rows) {
     char buf[128];
     int n = 0;
     // Remove our image, then clear every row we currently own so a shrink does
-    // not leave stale pixels or a stranded status line behind.
-    n = snprintf(buf, sizeof buf, "\x1b_Ga=d,d=I,i=1\x1b\\");
-    (void)!write(t->fd, buf, (size_t)n);
+    // not leave stale pixels, placeholder cells, or a stranded status line
+    // behind.
+    gfx_delete_image(t->fd);
     for (int i = 0; i < t->inline_rows; i++) {
         n = snprintf(buf, sizeof buf, "\x1b[%d;1H\x1b[2K", t->inline_origin + i);
         (void)!write(t->fd, buf, (size_t)n);
@@ -114,24 +114,28 @@ int term_resize_inline(Term *t, int rows) {
 
 void term_leave(Term *t) {
     if (t->inline_mode) {
-        // Delete only our Kitty image and status line. Preserve the rest of
-        // the terminal, then park the cursor below the reserved game block.
+        // Delete only our Kitty image and the block we reserved. Preserve the
+        // rest of the terminal, then park the cursor below that block. Every
+        // row is cleared, not just the status line: under tmux the image rows
+        // hold placeholder cells, which are text and would otherwise stay.
+        gfx_delete_image(t->fd);
         if (t->inline_rows < 1) {
-            const char *leave = "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[?25h";
-            (void)!write(t->fd, leave, strlen(leave));
+            (void)!write(t->fd, "\x1b[?25h", 6);
         } else {
             char buf[96];
-            int n = snprintf(buf, sizeof buf,
-                             "\x1b_Ga=d,d=I,i=1\x1b\\"
-                             "\x1b[%d;1H\x1b[2K"
-                             "\x1b[%d;1H\x1b[?25h\r\n",
-                             t->inline_origin + t->inline_rows - 1,
+            for (int i = 0; i < t->inline_rows; i++) {
+                int n = snprintf(buf, sizeof buf, "\x1b[%d;1H\x1b[2K",
+                                 t->inline_origin + i);
+                (void)!write(t->fd, buf, (size_t)n);
+            }
+            int n = snprintf(buf, sizeof buf, "\x1b[%d;1H\x1b[?25h\r\n",
                              t->inline_origin + t->inline_rows);
             (void)!write(t->fd, buf, (size_t)n);
         }
     } else if (t->alt) {
         // Drop the image, leave alt screen, restore cursor.
-        (void)!write(t->fd, "\x1b_Ga=d,d=I,i=1\x1b\\\x1b[?25h\x1b[?1049l", 30);
+        gfx_delete_image(t->fd);
+        (void)!write(t->fd, "\x1b[?25h\x1b[?1049l", 14);
         t->alt = false;
     }
     if (t->raw && have_saved) {

@@ -86,29 +86,43 @@ static int writeall(int fd, const char *p, size_t n) {
 // `natural` is set the c=/r= fields are omitted, which tells the terminal to
 // draw the image at exactly its pixel size instead of stretching it to a cell
 // rect.
+//
+// Under tmux the image is transmitted without a placement (a=t) and then given
+// a virtual one (U=1), which draws nothing by itself: the placeholder cells
+// already on screen are what the terminal fills in. Everything is re-sent each
+// frame because replacing an image id also drops its placements.
 static size_t build_frame(char *out, const char *b64, size_t blen,
                           int w, int h, const Layout *l) {
     size_t o = 0, off = 0;
     int first = 1;
-    o += (size_t)sprintf(out + o, "\x1b[%d;%dH", l->y, l->x);
+    char head[96];
+    bool tmux = gfx_tmux();
+
+    if (!tmux) o += (size_t)sprintf(out + o, "\x1b[%d;%dH", l->y, l->x);
     while (off < blen) {
         size_t n = blen - off;
         if (n > CHUNK) n = CHUNK;
         int more = (off + n < blen);
-        if (first) {
-            o += (size_t)sprintf(out + o,
-                    "\x1b_Ga=T,f=24,s=%d,v=%d,i=1,p=1,q=2,C=1", w, h);
+        if (first && tmux) {
+            sprintf(head, "a=t,f=24,s=%d,v=%d,i=%d,q=2,m=%d;",
+                    w, h, GFX_IMAGE_ID, more);
+        } else if (first) {
+            int p = sprintf(head, "a=T,f=24,s=%d,v=%d,i=%d,p=1,q=2,C=1",
+                            w, h, GFX_IMAGE_ID);
             if (!l->natural)
-                o += (size_t)sprintf(out + o, ",c=%d,r=%d", l->cols, l->rows);
-            o += (size_t)sprintf(out + o, ",m=%d;", more);
+                p += sprintf(head + p, ",c=%d,r=%d", l->cols, l->rows);
+            sprintf(head + p, ",m=%d;", more);
         } else {
-            o += (size_t)sprintf(out + o, "\x1b_Gm=%d;", more);
+            sprintf(head, "m=%d;", more);
         }
-        memcpy(out + o, b64 + off, n);
-        o += n;
-        out[o++] = 0x1b; out[o++] = '\\';
+        o += gfx_apc(out + o, head, b64 + off, n);
         off += n;
         first = 0;
+    }
+    if (tmux) {
+        sprintf(head, "a=p,U=1,i=%d,p=1,c=%d,r=%d,q=2",
+                GFX_IMAGE_ID, l->cols, l->rows);
+        o += gfx_apc(out + o, head, NULL, 0);
     }
     return o;
 }
@@ -195,6 +209,9 @@ static void *render_thread(void *arg) {
         int w = r->w[idx], h = r->h[idx];
         Layout l = r->layout;
         bool clear = r->layout_dirty && l.allow_clear;
+        // The placeholder cells are the placement under tmux, so a new layout
+        // means laying them down again over the new rectangle.
+        bool place = r->layout_dirty && gfx_tmux();
         r->layout_dirty = false;
         double t = now_sec();
         snprintf(osd, sizeof osd, "%s", r->osd_until > t ? r->osd : "");
@@ -209,8 +226,9 @@ static void *render_thread(void *arg) {
             if (!nb) goto release;
             b64 = nb; b64cap = need_b64;
         }
-        // Worst case: one 12-byte escape wrapper per chunk, plus cursor moves.
-        size_t need_msg = need_b64 + (need_b64 / CHUNK + 2) * 64 + 256;
+        // Worst case: one wrapped escape per chunk, plus the placement escape
+        // and cursor moves.
+        size_t need_msg = need_b64 + (need_b64 / CHUNK + 2) * gfx_apc_max(0) + 256;
         if (need_msg > msgcap) {
             char *nm = realloc(msg, need_msg);
             if (!nm) goto release;
@@ -219,6 +237,7 @@ static void *render_thread(void *arg) {
 
         pthread_mutex_lock(&r->wm);
         if (clear) (void)writeall(r->ttyfd, "\x1b[2J", 4);
+        if (place) gfx_write_placeholders(r->ttyfd, &l);
 
         size_t blen = b64enc(src, raw, b64);
         size_t n = build_frame(msg, b64, blen, w, h, &l);

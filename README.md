@@ -40,8 +40,8 @@ make
 The first time you open a ROM for a platform you have no core for, `rom` offers
 to fetch and build that core.
 
-Run `rom` directly in Ghostty or kitty, not inside tmux. tmux interferes with
-the graphics and keyboard protocols.
+Ghostty or kitty has to be the terminal underneath, but it can be running tmux
+— see [tmux](#tmux) for the one setting that needs.
 
 Optional installation:
 
@@ -182,6 +182,35 @@ battery save loads as always — press F3 to pick up from a save state.
 | `-` / `=` | Volume down / up |
 | `m` | Mute |
 
+## tmux
+
+`rom` runs inside tmux. Enable passthrough once:
+
+```sh
+tmux set -g allow-passthrough all      # add to ~/.tmux.conf to keep it
+```
+
+Without it every graphics escape is swallowed, and `rom` says so rather than
+drawing nothing.
+
+tmux cannot be shown an image at the cursor — it neither tracks nor redraws one,
+so the picture would survive until the first redraw and then vanish. Instead the
+frame is transmitted with no placement and given a *virtual* one, and the cells
+it occupies are filled with placeholder characters carrying the image id in
+their foreground color and their row and column in combining diacritics. Those
+are ordinary text, so tmux moves, scrolls, and repaints them without
+understanding any of it, and the terminal underneath substitutes pixels. Scaling
+and resizing work as usual.
+
+One thing does not carry over: tmux 3.5 has no key-release reporting, so
+releases are inferred from auto-repeat instead — a key lifts once its repeats
+stop. Holding a direction therefore hiccups once at the start, while the
+keyboard waits out its delay-until-repeat. Outside tmux, real releases from the
+kitty keyboard protocol are used as before.
+
+Expect a lower frame rate than a bare terminal: every frame is copied through
+tmux on its way out.
+
 ## Scaling
 
 By default the terminal stretches the image to its cell rect, so only one
@@ -264,7 +293,8 @@ are written atomically and SRAM is autosaved every five seconds when changed.
 ## Limitations
 
 - macOS (CoreAudio) or Linux (ALSA)
-- Ghostty or kitty required
+- Ghostty or kitty required, optionally with tmux on top
+- In tmux, key releases are inferred from auto-repeat
 - GL cores on macOS only; Linux is software-rendered until an EGL backend lands
 - No Vulkan cores
 - Player 1 keyboard input only
