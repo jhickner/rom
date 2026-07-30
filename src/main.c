@@ -1004,12 +1004,23 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
     }
     free(sbuf);
 
-    // SRAM path: write, clobber memory, read back.
+    // SRAM path: write, clobber memory, read back. This drives the same
+    // save file a real run does, so the player's battery save is copied out
+    // first and put back at the end - otherwise --selftest silently destroys
+    // it.
     state_paths_init(rom);
     size_t srsize = core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
     uint8_t *mem = core.get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    uint8_t *sram_backup = NULL;
     if (mem && srsize) {
         sram_load(&core);
+        sram_backup = malloc(srsize);
+        if (!sram_backup) {
+            printf("sram: cannot back up %zu bytes, skipping the test\n", srsize);
+            core_unload(&core);
+            return rc;
+        }
+        memcpy(sram_backup, mem, srsize);
         for (size_t i = 0; i < srsize; i++) mem[i] = (uint8_t)(i * 7 + 1);
         if (sram_save(&core) != 0) { printf("sram: save FAILED\n"); rc = 1; }
         memset(mem, 0, srsize);
@@ -1019,8 +1030,9 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
             if (mem[i] != (uint8_t)(i * 7 + 1)) { ok = false; break; }
         printf("sram: round trip %s\n", ok ? "OK" : "MISMATCH");
         if (!ok) rc = 1;
-        memset(mem, 0, srsize);
-        sram_save(&core);       // don't leave the test pattern on disk
+        memcpy(mem, sram_backup, srsize);
+        sram_save(&core);       // put the real save back over the test pattern
+        free(sram_backup);
     }
 
     core_unload(&core);
