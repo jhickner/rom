@@ -530,7 +530,7 @@ static void do_hotkey(int hk) {
         if (cfg.volume > 100) cfg.volume = 100;
         muted = false;              // reaching for the volume means you want to hear it
         audio_set_volume(audio, cfg.volume);
-        if (game_volume_save(cfg.volume) != 0)
+        if (game_setting_save("volume", cfg.volume, 0, 100) != 0)
             logmsg("volume: failed to save per-game setting");
         osd("volume %d%%", cfg.volume);
         logmsg("volume -> %d%%", cfg.volume);
@@ -557,6 +557,8 @@ static void do_hotkey(int hk) {
             break;
         }
         g_scale = want;
+        if (game_setting_save("scale", g_scale, SCALE_MIN, SCALE_MAX) != 0)
+            logmsg("scale: failed to save per-game setting");
         if (!term.inline_mode) {
             osd("scale %dx (inline mode only)", g_scale);
             break;
@@ -1134,7 +1136,8 @@ int main(int argc, char **argv) {
         config_load(&cfg, p, sys);
         if (rom) {
             state_paths_init(rom);
-            cfg.volume = game_volume_load(cfg.volume);
+            cfg.volume = game_setting_load("volume", cfg.volume, 0, 100);
+            cfg.scale = game_setting_load("scale", cfg.scale, SCALE_MIN, SCALE_MAX);
         }
         if (*sys) printf("Platform overrides applied: %s\n\n", sys);
         config_print(&cfg, p);
@@ -1276,8 +1279,12 @@ int main(int argc, char **argv) {
            core.av.timing.sample_rate);
 
     state_paths_init(rom);
-    cfg.volume = game_volume_load(cfg.volume);
-    logmsg("volume: %d%% for %s", cfg.volume, state_rom_base());
+    cfg.volume = game_setting_load("volume", cfg.volume, 0, 100);
+    // An explicit --scale wins; otherwise pick up where this game left off.
+    if (scale_arg <= 0)
+        g_scale = game_setting_load("scale", g_scale, SCALE_MIN, SCALE_MAX);
+    logmsg("volume: %d%%, scale %dx for %s", cfg.volume, g_scale,
+           state_rom_base());
     sram_load(&core);
     recent_record(rom);
 

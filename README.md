@@ -159,7 +159,8 @@ Resume  ↑/↓ move · enter play · q cancel
 Arrows or `j`/`k` move, Enter plays, `1`–`9` jump straight to a game, `q`
 cancels. Games are matched by absolute path, so entries survive a change of
 directory; anything that has been moved or deleted drops off the list. The
-battery save loads as always — press F3 to pick up from a save state.
+battery save loads as always, and the game comes back at the volume and scale
+you left it — press F3 to pick up from a save state.
 
 ### Controls
 
@@ -292,14 +293,19 @@ core's own default.
 ```ini
 [core.n64]
 mupen64plus-rdp-plugin = angrylion
-``` Volume changes are remembered separately for each ROM; the configured
-volume is the initial default.
+```
+
+Volume and scale changes are remembered separately for each ROM, so a game
+comes back the size and loudness you left it — the configured values are just
+the initial defaults. Passing `--scale` overrides what was remembered for that
+run without replacing it.
 
 | Path | Contents |
 |---|---|
 | `~/.config/rom/config` | Settings and bindings |
 | `~/.config/rom/saves/` | Battery saves |
 | `~/.config/rom/states/` | Save states |
+| `~/.config/rom/games/` | Per-ROM volume and scale |
 | `~/.config/rom/recent` | Games played, for `--resume` |
 | `~/.config/rom/rom.log` | Frontend and core log |
 

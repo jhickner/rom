@@ -41,28 +41,28 @@ static void sram_path(char *out, size_t cap) {
     snprintf(out, cap, "%s/%s.srm", g_saves_dir, g_base);
 }
 
-static void volume_path(char *out, size_t cap) {
-    snprintf(out, cap, "%s/%s.volume", g_settings_dir, g_base);
+static void setting_path(char *out, size_t cap, const char *key) {
+    snprintf(out, cap, "%s/%s.%s", g_settings_dir, g_base, key);
 }
 
-int game_volume_load(int fallback) {
+int game_setting_load(const char *key, int fallback, int lo, int hi) {
     char path[600], buf[32], extra;
-    volume_path(path, sizeof path);
+    setting_path(path, sizeof path, key);
     FILE *f = fopen(path, "r");
     if (!f) return fallback;
-    int volume;
+    int value;
     bool ok = fgets(buf, sizeof buf, f) &&
-              sscanf(buf, " %d %c", &volume, &extra) == 1;
+              sscanf(buf, " %d %c", &value, &extra) == 1;
     fclose(f);
-    if (!ok || volume < 0 || volume > 100) return fallback;
-    return volume;
+    if (!ok || value < lo || value > hi) return fallback;
+    return value;
 }
 
-int game_volume_save(int volume) {
-    if (volume < 0 || volume > 100) return -1;
+int game_setting_save(const char *key, int value, int lo, int hi) {
+    if (value < lo || value > hi) return -1;
     char path[600], buf[16];
-    volume_path(path, sizeof path);
-    int n = snprintf(buf, sizeof buf, "%d\n", volume);
+    setting_path(path, sizeof path, key);
+    int n = snprintf(buf, sizeof buf, "%d\n", value);
     return write_file_atomic(path, buf, (size_t)n);
 }
 

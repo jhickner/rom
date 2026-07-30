@@ -346,8 +346,13 @@ void state_paths_init(const char *rom_path);
 const char *state_rom_base(void);
 // Filename without directory or extension, the name saves are keyed on.
 void rom_base_name(const char *rom_path, char *out, size_t cap);
-int  game_volume_load(int fallback);
-int  game_volume_save(int volume);
+// Settings the player changes mid-game and expects back next time, kept per
+// ROM under <config>/games. `key` names the setting, e.g. "volume" or "scale";
+// a stored value outside lo..hi is ignored in favour of `fallback`.
+#define SCALE_MIN 1
+#define SCALE_MAX 8
+int  game_setting_load(const char *key, int fallback, int lo, int hi);
+int  game_setting_save(const char *key, int value, int lo, int hi);
 int  state_save(Core *c, int slot, char *err, size_t errlen);
 int  state_load(Core *c, int slot, char *err, size_t errlen);
 bool state_slot_exists(int slot);
