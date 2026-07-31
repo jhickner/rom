@@ -127,7 +127,7 @@ its siblings in the same directory and carries its `ecwolf.pk3` internally.
 
 | Option | Description |
 |---|---|
-| `--resume` | Pick from the games you have been playing |
+| `--resume` | Pick from the games you have been playing, at the newest save state |
 | `--core <path>` | Use a specific core |
 | `--fullscreen` | Fill the terminal window |
 | `--scale <n>` | Integer zoom in inline mode, 1–8 (default 2); change live with `[` / `]` |
@@ -158,9 +158,14 @@ Resume  ↑/↓ move · enter play · q cancel
 
 Arrows or `j`/`k` move, Enter plays, `1`–`9` jump straight to a game, `q`
 cancels. Games are matched by absolute path, so entries survive a change of
-directory; anything that has been moved or deleted drops off the list. The
-battery save loads as always, and the game comes back at the volume and scale
-you left it — press F3 to pick up from a save state.
+directory; anything that has been moved or deleted drops off the list.
+
+Resuming means resuming: the most recently written save state is loaded and
+becomes the live slot, so F2 keeps saving where you already were, and the game
+returns at the volume and scale you left it. Add `--slot <n>` to resume a
+particular slot instead, and launch by path rather than `--resume` to start from
+the battery save alone. A state the core rejects — one written by a different
+core version, say — is reported and skipped rather than being fatal.
 
 ### Controls
 

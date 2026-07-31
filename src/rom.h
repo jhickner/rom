@@ -356,6 +356,8 @@ int  game_setting_save(const char *key, int value, int lo, int hi);
 int  state_save(Core *c, int slot, char *err, size_t errlen);
 int  state_load(Core *c, int slot, char *err, size_t errlen);
 bool state_slot_exists(int slot);
+// Slot holding the most recently written state for this game, -1 if none.
+int  state_newest_slot(void);
 // Bit N set means slot N holds a state for `rom_path`. Independent of the
 // paths state_paths_init established, so it can be asked about other games.
 unsigned state_slot_mask(const char *rom_path);

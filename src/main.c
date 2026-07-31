@@ -1099,14 +1099,17 @@ int main(int argc, char **argv) {
     gfx_init();
     const char *rom = NULL, *core_path = NULL, *shot = NULL, *recolor_arg = NULL;
     bool want_audio = true, force = false, inline_mode = true, keys_only = false;
-    bool want_resume = false;
+    bool want_resume = false, slot_given = false;
     int selftest = 0, scale_arg = 0;
     double strength_arg = -1.0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--resume")) want_resume = true;
         else if (!strcmp(argv[i], "--core") && i + 1 < argc) core_path = argv[++i];
-        else if (!strcmp(argv[i], "--slot") && i + 1 < argc) slot = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--slot") && i + 1 < argc) {
+            slot = atoi(argv[++i]);
+            slot_given = true;
+        }
         else if (!strcmp(argv[i], "--no-audio")) want_audio = false;
         else if (!strcmp(argv[i], "--force")) force = true;
         else if (!strcmp(argv[i], "--inline")) inline_mode = true;
@@ -1279,6 +1282,17 @@ int main(int argc, char **argv) {
            core.av.timing.sample_rate);
 
     state_paths_init(rom);
+
+    // Resuming means picking up where you stopped, so --resume loads the state
+    // written most recently and makes that the live slot, leaving F2 pointed at
+    // the one you were already using. An explicit --slot says which instead.
+    int resume_slot = -1;
+    if (want_resume) {
+        resume_slot = slot_given ? slot : state_newest_slot();
+        if (resume_slot >= 0 && !state_slot_exists(resume_slot)) resume_slot = -1;
+        if (resume_slot >= 0) slot = resume_slot;
+    }
+
     cfg.volume = game_setting_load("volume", cfg.volume, 0, 100);
     // An explicit --scale wins; otherwise pick up where this game left off.
     if (scale_arg <= 0)
@@ -1287,6 +1301,21 @@ int main(int argc, char **argv) {
            state_rom_base());
     sram_load(&core);
     recent_record(rom);
+
+    // Cores can be unhappy unserialising before they have run at all, so let a
+    // frame through first. Nothing reaches the player: the renderer is not up
+    // and audio has not started, so this costs a silent frame rather than a
+    // blip of the wrong scene.
+    char resume_err[128] = "";
+    if (resume_slot >= 0) {
+        core_run_frame();
+        if (state_load(&core, resume_slot, resume_err, sizeof resume_err) != 0) {
+            logmsg("resume: slot %d failed: %s", resume_slot, resume_err);
+            resume_slot = -1;
+        } else {
+            logmsg("resume: loaded slot %d", resume_slot);
+        }
+    }
 
     term.fd = ttyfd;
     term.inline_mode = inline_mode;
@@ -1388,6 +1417,10 @@ int main(int argc, char **argv) {
         renderer_set_osd(&rend,
             "no key-release reporting here: holding a key leans on auto-repeat",
             6.0);
+    else if (*resume_err)
+        osd("resume failed: %s - starting from the battery save", resume_err);
+    else if (resume_slot >= 0)
+        osd("resumed slot %d  |  ^C quit  F2 save  F3 load", resume_slot);
     else
         osd("%s  |  ^C quit  F2 save  F3 load  Tab fast-forward",
             core.sys.library_name ? core.sys.library_name : "core");

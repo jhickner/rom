@@ -116,6 +116,22 @@ bool state_slot_exists(int slot) {
     return stat(path, &st) == 0;
 }
 
+int state_newest_slot(void) {
+    int newest = -1;
+    time_t best = 0;
+    for (int s = 0; s < MAX_STATE_SLOTS; s++) {
+        char path[600];
+        struct stat st;
+        state_path(path, sizeof path, s);
+        if (stat(path, &st) != 0) continue;
+        if (newest < 0 || st.st_mtime > best) {
+            newest = s;
+            best = st.st_mtime;
+        }
+    }
+    return newest;
+}
+
 unsigned state_slot_mask(const char *rom_path) {
     char base[256], path[900];
     rom_base_name(rom_path, base, sizeof base);
