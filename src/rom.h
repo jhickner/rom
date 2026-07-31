@@ -174,8 +174,8 @@ int  theme_query(Theme *t, int ttyfd);
 // -------------------------------------------------------------- recolor
 
 enum {
-    RECOLOR_OFF, RECOLOR_HUE, RECOLOR_NEAREST, RECOLOR_DUOTONE, RECOLOR_DITHER,
-    RECOLOR_COUNT
+    RECOLOR_OFF, RECOLOR_HUE, RECOLOR_NEAREST, RECOLOR_DUOTONE, RECOLOR_TINT,
+    RECOLOR_DITHER, RECOLOR_COUNT
 };
 
 typedef struct {

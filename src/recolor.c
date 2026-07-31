@@ -6,6 +6,10 @@
 
 #define LUT_N 65536
 
+// Oklab chroma the tint mode paints with. Enough to read clearly as a colour
+// wash; much more and it stops looking like the terminal's own background.
+#define TINT_CHROMA 0.08
+
 typedef struct { double L, a, b; } Lab;
 
 // ------------------------------------------------------------ colour space
@@ -69,7 +73,7 @@ static Lab lab_mix(Lab p, Lab q, double t) {
 // ------------------------------------------------------------------ modes
 
 static const char *mode_names[RECOLOR_COUNT] = {
-    "off", "hue", "nearest", "duotone", "dither"
+    "off", "hue", "nearest", "duotone", "tint", "dither"
 };
 
 const char *recolor_mode_name(int mode) {
@@ -188,6 +192,27 @@ int recolor_build(Recolor *rc, int mode, const Theme *t, double strength) {
             if (tt < 0.0) tt = 0.0;
             if (tt > 1.0) tt = 1.0;
             out = lab_mix(bg, fg, tt);
+        } else if (mode == RECOLOR_TINT) {
+            // Every colour becomes a tone of the background: its hue over the
+            // source's own lightness, so shading and structure survive while
+            // the palette collapses to one colour.
+            out.L = src.L;
+            // The background's own chroma is no use as the tint strength.
+            // Terminal backgrounds are nearly neutral - a dark blue-grey like
+            // #1e1e2e carries a chroma of about 0.01, which is invisible - so
+            // take only the hue and give it a chroma that reads. Tapered
+            // towards black and white, where a saturated tone would clip on
+            // the way back to sRGB.
+            double bc = hypot(bg.a, bg.b);
+            if (bc > 1e-4) {
+                double taper = 2.0 * (1.0 - fabs(2.0 * src.L - 1.0));
+                if (taper > 1.0) taper = 1.0;
+                double c = TINT_CHROMA * taper;
+                out.a = bg.a / bc * c;
+                out.b = bg.b / bc * c;
+            } else {
+                out.a = out.b = 0.0;    // a grey background can only mean grey
+            }
         } else {
             // Hue mode: keep the source's lightness and saturation, adopt the
             // nearest theme hue. Structure and shading survive intact.

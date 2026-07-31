@@ -380,7 +380,7 @@ int config_write_default(const char *path) {
                "# Set false if it upsets your tmux key bindings; releases are then inferred\n"
                "# from auto-repeat instead.\n");
     fprintf(f, "tmux_keyboard    = %s\n", c.tmux_keyboard ? "true" : "false");
-    fprintf(f, "# recolor: off | hue | nearest | duotone | dither\n");
+    fprintf(f, "# recolor: off | hue | nearest | duotone | tint | dither\n");
     fprintf(f, "recolor          = %s\n", recolor_mode_name(c.recolor));
     fprintf(f, "recolor_strength = %.2f\n", c.recolor_strength);
     fprintf(f,

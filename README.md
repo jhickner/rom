@@ -133,7 +133,7 @@ its siblings in the same directory and carries its `ecwolf.pk3` internally.
 | `--scale <n>` | Integer zoom in inline mode, 1–8 (default 2); change live with `[` / `]` |
 | `--slot <n>` | Initial save-state slot, 0–9 |
 | `--no-audio` | Disable audio |
-| `--recolor <mode>` | `off`, `hue`, `nearest`, `duotone`, or `dither` |
+| `--recolor <mode>` | `off`, `hue`, `nearest`, `duotone`, `tint`, or `dither` |
 | `--recolor-strength <0..1>` | Blend recoloring with the original |
 | `--keys` | Print current key bindings |
 | `--selftest <n>` | Run `n` frames without a terminal |

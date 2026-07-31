@@ -867,7 +867,7 @@ static void usage(void) {
         "  --fullscreen    take over the screen and zoom to fit\n"
         "  --scale <n>     integer zoom for inline mode (default 2)\n"
         "  --recolor <m>   try to match colours to your terminal theme:\n"
-        "                  off | hue | nearest | duotone | dither\n"
+        "                  off | hue | nearest | duotone | tint | dither\n"
         "  --recolor-strength <0..1>   blend against the original (default 1)\n"
         "  --keys          print the current keybinds and exit (pass a ROM for\n"
         "                  that platform's overrides)\n"
@@ -1166,7 +1166,7 @@ int main(int argc, char **argv) {
         recolor_mode = recolor_mode_from_name(recolor_arg);
         if (recolor_mode < 0) {
             fprintf(stderr, APP_NAME ": unknown recolor mode '%s'\n"
-                            "  expected: off hue nearest duotone dither\n",
+                            "  expected: off hue nearest duotone tint dither\n",
                     recolor_arg);
             return 2;
         }
