@@ -1,5 +1,4 @@
 #include <fcntl.h>
-#include <libgen.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -781,21 +780,11 @@ static bool file_exists(const char *p) {
     return stat(p, &st) == 0 && S_ISREG(st.st_mode);
 }
 
-static int find_core(char *out, size_t cap, const char *rom, const char *exedir) {
+static int find_core(char *out, size_t cap, const char *rom) {
     const char *name = core_for_ext(rom);
     if (!name) return -1;
-    const char *dirs[3];
-    char cfgdir[512], reldir[512];
-    snprintf(cfgdir, sizeof cfgdir, "%s/cores", config_dir());
-    snprintf(reldir, sizeof reldir, "%s/../cores", exedir);
-    dirs[0] = cfgdir;
-    dirs[1] = "cores";
-    dirs[2] = reldir;
-    for (int i = 0; i < 3; i++) {
-        snprintf(out, cap, "%s/%s", dirs[i], name);
-        if (file_exists(out)) return 0;
-    }
-    snprintf(out, cap, "%s", name);
+    snprintf(out, cap, "%s/cores/%s", config_dir(), name);
+    if (file_exists(out)) return 0;
     return -1;
 }
 
@@ -806,12 +795,11 @@ static void print_missing_core(const char *rom, int i) {
         return;
     }
     fprintf(stderr, "  needs:    %s\n", CORES[i].core);
-    fprintf(stderr, "  searched: %s/cores, ./cores, <exedir>/../cores\n\n",
-            config_dir());
+    fprintf(stderr, "  searched: %s/cores\n\n", config_dir());
     fprintf(stderr, "  build it from https://github.com/%s and copy\n"
-                    "  %s into cores/, or point at one you already have:\n"
+                    "  %s into %s/cores, or point at one you already have:\n"
                     "    " APP_NAME " --core <path> \"%s\"\n",
-            CORES[i].repo, CORES[i].core, rom);
+            CORES[i].repo, CORES[i].core, config_dir(), rom);
 }
 
 static bool ask_yes(void) {
@@ -825,8 +813,8 @@ static bool ask_yes(void) {
 // Resolves the core for `rom`, offering to fetch and build it when it is
 // missing. Building needs a real terminal to ask on, so batch runs still get
 // the plain instructions.
-static int obtain_core(char *out, size_t cap, const char *rom, const char *exedir) {
-    if (find_core(out, cap, rom, exedir) == 0) return 0;
+static int obtain_core(char *out, size_t cap, const char *rom) {
+    if (find_core(out, cap, rom) == 0) return 0;
 
     int i = core_entry_for(rom);
     if (i < 0 || !isatty(STDIN_FILENO)) {
@@ -1172,12 +1160,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    char exedir0[512];
-    snprintf(exedir0, sizeof exedir0, "%s", argv[0]);
     if (selftest > 0) {
         char cb[600];
         if (!core_path) {
-            if (obtain_core(cb, sizeof cb, rom, dirname(exedir0)) != 0) return 1;
+            if (obtain_core(cb, sizeof cb, rom) != 0) return 1;
             core_path = cb;
         }
         // No terminal to ask, so the built-in palette stands in.
@@ -1219,12 +1205,9 @@ int main(int argc, char **argv) {
     logmsg("system: '%s', scale %d, term_scale %d", system, g_scale,
            (int)g_term_scale);
 
-    char exedir[512];
-    snprintf(exedir, sizeof exedir, "%s", argv[0]);
-    char *ed = dirname(exedir);
     char corebuf[600];
     if (!core_path) {
-        if (obtain_core(corebuf, sizeof corebuf, rom, ed) != 0) return 1;
+        if (obtain_core(corebuf, sizeof corebuf, rom) != 0) return 1;
         core_path = corebuf;
     }
 

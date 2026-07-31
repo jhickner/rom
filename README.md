@@ -70,13 +70,11 @@ it, installs the core, and starts the game. Say no and it prints the filename
 and repository so you can build it yourself. Runs without a terminal on stdin
 skip the prompt and print the same instructions.
 
-Cores are searched in:
+Cores are loaded from `~/.config/rom/cores/`, wherever you run `rom` from. Use
+`--core <path>` to select one directly.
 
-1. `~/.config/rom/cores/`
-2. `./cores/`
-3. `<executable>/../cores/`
-
-Use `--core <path>` to select one directly.
+Cores you build yourself in this repository's `cores/` are copied there by
+`make install`, or on their own with `make install-cores`.
 
 | ROM | Core |
 |---|---|
