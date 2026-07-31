@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  ?= -O2 -g
 CFLAGS  += -std=c11 -Wall -Wextra
-PREFIX  ?= /usr/local
+PREFIX  ?= $(HOME)/.local
 
 UNAME_S := $(shell uname -s)
 
