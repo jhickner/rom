@@ -265,9 +265,16 @@ table, so the result is stable and fast.
 | `hue` | Keeps shading while adopting theme hues |
 | `nearest` | Maps directly to the terminal palette |
 | `duotone` | Uses the background-to-foreground ramp |
+| `tint` | Collapses everything to tones of the background color |
 | `dither` | Mixes nearby palette colors to recover shades |
 
-Start with `--recolor hue`. Press F8 to compare modes while playing.
+Start with `--recolor hue`. Press F8 to compare modes while playing — the
+palette is read at startup either way, so F8 works even when recoloring starts
+off.
+
+`tint` borrows only the background's *hue*, not its saturation: terminal
+backgrounds are nearly neutral, and a literal reading of one would be invisible.
+A background with no hue at all — pure black or grey — can only give greyscale.
 
 ## Config and saves
 

@@ -69,7 +69,13 @@ int theme_query(Theme *t, int ttyfd) {
         o += (size_t)snprintf(q + o, sizeof q - o, "\x1b]4;%d;?\x1b\\", i);
     o += (size_t)snprintf(q + o, sizeof q - o, "\x1b]10;?\x1b\\");
     o += (size_t)snprintf(q + o, sizeof q - o, "\x1b]11;?\x1b\\");
-    if (write(ttyfd, q, o) < 0) return -1;
+
+    // tmux answers these itself, out of its own idea of the palette rather than
+    // the terminal's, which is how a themed background gets reported as black.
+    // Wrapped, the query is opaque to tmux and only the terminal replies.
+    char wrapped[2 * sizeof q + 16];
+    size_t n = gfx_wrap(wrapped, q, o);
+    if (write(ttyfd, wrapped, n) < 0) return -1;
 
     char buf[8192];
     size_t got = 0;

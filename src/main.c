@@ -1387,14 +1387,16 @@ int main(int argc, char **argv) {
                                            : "inferred releases from repeat");
 
     // Grouped with the other startup probes: these queries have read windows
-    // that would swallow keystrokes if run once the game is underway.
+    // that would swallow keystrokes if run once the game is underway. That is
+    // also why the palette is read even when recoloring is off - F8 can turn it
+    // on later, and by then it is too late to ask.
     theme_fallback(&theme);
+    theme_query(&theme, ttyfd);
+    logmsg("theme: %s, bg #%02x%02x%02x fg #%02x%02x%02x",
+           theme.from_terminal ? "from terminal" : "built-in fallback",
+           theme.bg[0], theme.bg[1], theme.bg[2],
+           theme.fg[0], theme.fg[1], theme.fg[2]);
     if (cfg.recolor != RECOLOR_OFF) {
-        theme_query(&theme, ttyfd);
-        logmsg("theme: %s, bg #%02x%02x%02x fg #%02x%02x%02x",
-               theme.from_terminal ? "from terminal" : "built-in fallback",
-               theme.bg[0], theme.bg[1], theme.bg[2],
-               theme.fg[0], theme.fg[1], theme.fg[2]);
         double t0 = now_sec();
         if (recolor_build(&recolor, cfg.recolor, &theme, cfg.recolor_strength) != 0)
             logmsg("recolor: failed to build LUT");
