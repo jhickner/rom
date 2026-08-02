@@ -165,6 +165,8 @@ typedef struct {
     uint8_t pal[16][3];      // ANSI 0-15
     uint8_t fg[3], bg[3];
     bool    from_terminal;   // false means the built-in fallback is in use
+    bool    bg_from_terminal;// the palette can answer while fg/bg does not, and
+                             // recolouring is built around the background
 } Theme;
 
 void theme_fallback(Theme *t);

@@ -6,9 +6,15 @@
 
 #define LUT_N 65536
 
-// Oklab chroma the tint mode paints with. Enough to read clearly as a colour
-// wash; much more and it stops looking like the terminal's own background.
-#define TINT_CHROMA 0.08
+// Tint ramps from the background colour itself up to a tone above it. LIFT is
+// how far above, as an absolute Oklab lightness step - deliberately not a
+// fraction of the background-to-foreground span, because a theme with a dim
+// foreground would then drag the whole ramp down into the dark with it. Only
+// the direction of that span is used, so a light theme tints downwards.
+// CHROMA is the Oklab chroma at the top, well above what a terminal background
+// carries on its own, which is what keeps the ramp from reading as grey.
+#define TINT_LIFT   0.40
+#define TINT_CHROMA 0.10
 
 typedef struct { double L, a, b; } Lab;
 
@@ -127,6 +133,24 @@ int recolor_build(Recolor *rc, int mode, const Theme *t, double strength) {
     double Lspan = fg.L - bg.L;
     if (fabs(Lspan) < 1e-6) Lspan = 1.0;
 
+    // Top of the tint ramp. Strength scales the colour, not the lightness: a
+    // dial that darkened the picture would only make low settings unusable,
+    // whereas this one runs from a plain tonal ramp up to a full wash of the
+    // background's hue, readable the whole way.
+    Lab tint_tip;
+    {
+        double bc = hypot(bg.a, bg.b);
+        tint_tip.L = bg.L + (Lspan < 0.0 ? -TINT_LIFT : TINT_LIFT);
+        if (tint_tip.L > 1.0) tint_tip.L = 1.0;
+        if (tint_tip.L < 0.0) tint_tip.L = 0.0;
+        if (bc > 1e-4) {
+            tint_tip.a = bg.a / bc * TINT_CHROMA * strength;
+            tint_tip.b = bg.b / bc * TINT_CHROMA * strength;
+        } else {
+            tint_tip.a = tint_tip.b = 0.0;  // a grey background can only mean grey
+        }
+    }
+
     if (mode == RECOLOR_DITHER) {
         rc->pair = malloc((size_t)LUT_N * 7);
         if (!rc->pair) return -1;
@@ -193,26 +217,14 @@ int recolor_build(Recolor *rc, int mode, const Theme *t, double strength) {
             if (tt > 1.0) tt = 1.0;
             out = lab_mix(bg, fg, tt);
         } else if (mode == RECOLOR_TINT) {
-            // Every colour becomes a tone of the background: its hue over the
-            // source's own lightness, so shading and structure survive while
-            // the palette collapses to one colour.
-            out.L = src.L;
-            // The background's own chroma is no use as the tint strength.
-            // Terminal backgrounds are nearly neutral - a dark blue-grey like
-            // #1e1e2e carries a chroma of about 0.01, which is invisible - so
-            // take only the hue and give it a chroma that reads. Tapered
-            // towards black and white, where a saturated tone would clip on
-            // the way back to sRGB.
-            double bc = hypot(bg.a, bg.b);
-            if (bc > 1e-4) {
-                double taper = 2.0 * (1.0 - fabs(2.0 * src.L - 1.0));
-                if (taper > 1.0) taper = 1.0;
-                double c = TINT_CHROMA * taper;
-                out.a = bg.a / bc * c;
-                out.b = bg.b / bc * c;
-            } else {
-                out.a = out.b = 0.0;    // a grey background can only mean grey
-            }
+            // Every colour becomes a tone of the background: black lands on the
+            // background itself, so unused areas of the picture disappear into
+            // the terminal, and brighter pixels rise along one hue. Shading and
+            // structure survive as a narrow band of tones.
+            double tt = src.L;
+            if (tt < 0.0) tt = 0.0;
+            if (tt > 1.0) tt = 1.0;
+            out = lab_mix(bg, tint_tip, tt);
         } else {
             // Hue mode: keep the source's lightness and saturation, adopt the
             // nearest theme hue. Structure and shading survive intact.
@@ -240,7 +252,11 @@ int recolor_build(Recolor *rc, int mode, const Theme *t, double strength) {
             }
         }
 
-        lab_to_rgb8(lab_mix(src, out, strength), rc->lut + (size_t)i * 3);
+        // Tint has already taken strength into the ramp. Blending it back
+        // towards the source here would undo the point of the mode by letting
+        // the original colours through.
+        double blend = (mode == RECOLOR_TINT) ? 1.0 : strength;
+        lab_to_rgb8(lab_mix(src, out, blend), rc->lut + (size_t)i * 3);
     }
     return 0;
 }

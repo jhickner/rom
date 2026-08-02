@@ -132,7 +132,7 @@ its siblings in the same directory and carries its `ecwolf.pk3` internally.
 | `--slot <n>` | Initial save-state slot, 0–9 |
 | `--no-audio` | Disable audio |
 | `--recolor <mode>` | `off`, `hue`, `nearest`, `duotone`, `tint`, or `dither` |
-| `--recolor-strength <0..1>` | Blend recoloring with the original |
+| `--recolor-strength <0..1>` | Blend recoloring with the original; for `tint`, how faint |
 | `--keys` | Print current key bindings |
 | `--selftest <n>` | Run `n` frames without a terminal |
 | `--shot <file>` | Save the final self-test frame as BMP |
@@ -213,6 +213,16 @@ not recognize — releases and modifier-only keys among them — straight to the
 pane. So key handling inside tmux is the same as outside it, Right Shift for
 Select included.
 
+Reading the theme is the one place where passthrough is *not* wanted for
+everything. tmux never answers `OSC 4`, so the palette query has to be passed
+through to the terminal. But tmux asks the terminal for its default foreground
+and background itself, and swallows every `OSC 10`/`OSC 11` reply that comes
+back — it cannot tell its own query from a pane's — so a passed-through query
+for those is never answered. `rom` sends them plain instead and lets tmux answer from
+the values it cached. When only the palette answers, the log line says
+`bg #000000 (fallback)`, and the modes built around the background — `tint` and
+`duotone` — will look wrong.
+
 If the terminal does not answer the capability query, `rom` falls back to
 inferring releases from auto-repeat: a key lifts once its repeats stop, so
 holding a direction hiccups once at the start while the keyboard waits out its
@@ -270,9 +280,23 @@ Start with `--recolor hue`. Press F8 to compare modes while playing — the
 palette is read at startup either way, so F8 works even when recoloring starts
 off.
 
-`tint` borrows only the background's *hue*, not its saturation: terminal
-backgrounds are nearly neutral, and a literal reading of one would be invisible.
-A background with no hue at all — pure black or grey — can only give greyscale.
+`tint` ramps from the background colour itself up to a tone above it, holding
+one hue throughout. Black lands exactly on the background, so unused areas of
+the picture disappear into the terminal, and the brightest pixels rise to a
+clearly lighter tone of the same colour.
+
+How far it rises is a fixed step in perceptual lightness, not a fraction of the
+distance to the foreground. A theme with a dim foreground would otherwise pull
+the whole ramp down with it and leave every game looking nearly black.
+
+It borrows only the background's *hue*, not its saturation: terminal backgrounds
+are nearly neutral, and a literal reading of one would come out grey. A
+background with no hue at all — pure black or grey — can only give greyscale.
+
+For `tint`, `--recolor-strength` sets how much of that hue the ramp carries, and
+leaves the lightness alone: 1.0 is a full wash of the background's colour, lower
+values fade towards a plain tonal ramp, and no setting is darker than another.
+For the other modes it blends against the original colours.
 
 ## Config and saves
 

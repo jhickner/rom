@@ -617,9 +617,16 @@ static void handle_input(void) {
             }
             // Under tmux the keyboard mode belongs to the terminal, which every
             // pane shares, so hand it back while someone else has the focus.
+            // The renderer is writing frames from its own thread even while
+            // paused, and this escape has to reach the terminal whole: landing
+            // inside the passthrough carrying an image would end that DCS
+            // early, spill the rest of the base64 onto the screen as text, and
+            // lose the mode change itself.
             if (gfx_tmux()) {
+                renderer_lock_tty(&rend);
                 if (out) input_kbd_pop(&input);
                 else input_kbd_push(&input);
+                renderer_unlock_tty(&rend);
             }
             if (cfg.pause_on_unfocus) {
                 focus_paused = out;
@@ -1375,9 +1382,10 @@ int main(int argc, char **argv) {
     // on later, and by then it is too late to ask.
     theme_fallback(&theme);
     theme_query(&theme, ttyfd);
-    logmsg("theme: %s, bg #%02x%02x%02x fg #%02x%02x%02x",
+    logmsg("theme: %s, bg #%02x%02x%02x%s fg #%02x%02x%02x",
            theme.from_terminal ? "from terminal" : "built-in fallback",
            theme.bg[0], theme.bg[1], theme.bg[2],
+           theme.bg_from_terminal ? "" : " (fallback)",
            theme.fg[0], theme.fg[1], theme.fg[2]);
     if (cfg.recolor != RECOLOR_OFF) {
         double t0 = now_sec();

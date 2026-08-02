@@ -139,6 +139,10 @@ void term_leave(Term *t) {
         t->alt = false;
     }
     if (t->raw && have_saved) {
+        // Key reports the terminal already queued - the releases for whatever
+        // quit the game among them - are still unread. Restoring the terminal
+        // with echo on would hand them to the shell, which prints them.
+        tcflush(t->fd, TCIFLUSH);
         tcsetattr(t->fd, TCSANOW, &saved_tio);
         t->raw = false;
     }
