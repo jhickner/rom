@@ -639,6 +639,18 @@ static void handle_input(void) {
             continue;
         }
 
+        // Alt chords are tmux's, not the game's: with the keyboard protocol on
+        // the terminal underneath, tmux no longer sees them, so presses go back
+        // to it by hand. Releases fall through, or a direction held when Alt is
+        // tapped would never lift. Anything bound in [hotkeys] stays rom's.
+        const char *tk;
+        if (cfg.tmux_alt_keys && (ev[i].key & MOD_ALT) && ev[i].pressed &&
+            gfx_tmux() && input.kbd_active && hotkey_for(ev[i].key) < 0 &&
+            (tk = tmux_key_name(ev[i].key)) != NULL) {
+            if (!ev[i].repeat) input_send_tmux_key(tk);
+            continue;
+        }
+
         // Held state ignores modifiers so game input is unaffected by them.
         uint32_t base = ev[i].key & KEY_BASE_MASK;
         bool *slotp = held_slot(base);

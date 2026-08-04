@@ -186,6 +186,8 @@ core version, say — is reported and skipped rather than being fatal.
 | `-` / `=` | Volume down / up |
 | `m` | Mute |
 
+Alt chords are left to tmux — see [tmux](#tmux).
+
 ## tmux
 
 `rom` runs inside tmux. Enable passthrough once:
@@ -227,6 +229,20 @@ If the terminal does not answer the capability query, `rom` falls back to
 inferring releases from auto-repeat: a key lifts once its repeats stop, so
 holding a direction hiccups once at the start while the keyboard waits out its
 delay-until-repeat.
+
+There is one thing tmux does lose that way: its own bindings. The key reports
+the terminal sends in this mode are not the ones tmux matches against, so
+`Alt+Left` stops switching windows and arrives as a plain Left in the game.
+`rom` hands those back — an Alt chord it has no hotkey for is dispatched to tmux
+with `send-keys -K`, which looks it up in the client's key table exactly as if
+it had been pressed there, so window switching, `Alt+1`, popups and the rest
+keep working while a game is running. Releases still reach the game, so a
+direction held when Alt is tapped does not stick.
+
+```ini
+[options]
+tmux_alt_keys = false     # keep Alt chords in the game instead
+```
 
 The keyboard mode belongs to the terminal, which every pane shares, so `rom`
 hands it back whenever another pane takes the focus and takes it again on

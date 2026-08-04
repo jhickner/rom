@@ -133,6 +133,7 @@ void config_defaults(Config *c) {
     c->term_scale = true;
     c->async_readback = true;
     c->tmux_keyboard = true;
+    c->tmux_alt_keys = true;
 }
 
 static char *trim(char *s) {
@@ -219,6 +220,7 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
             else if (strcasecmp(k, "async_readback") == 0) c->async_readback = parse_bool(v);
             else if (strcasecmp(k, "tmux_keyboard") == 0) c->tmux_keyboard = parse_bool(v);
+            else if (strcasecmp(k, "tmux_alt_keys") == 0) c->tmux_alt_keys = parse_bool(v);
             else if (strcasecmp(k, "recolor") == 0) {
                 int m = recolor_mode_from_name(v);
                 if (m < 0) fprintf(stderr, "config:%d: unknown recolor mode '%s'\n", lineno, v);
@@ -325,6 +327,7 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %s\n", "term_scale", c->term_scale ? "true" : "false");
     printf("  %-22s %s\n", "async_readback", c->async_readback ? "true" : "false");
     printf("  %-22s %s\n", "tmux_keyboard", c->tmux_keyboard ? "true" : "false");
+    printf("  %-22s %s\n", "tmux_alt_keys", c->tmux_alt_keys ? "true" : "false");
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
     printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
@@ -380,6 +383,10 @@ int config_write_default(const char *path) {
                "# Set false if it upsets your tmux key bindings; releases are then inferred\n"
                "# from auto-repeat instead.\n");
     fprintf(f, "tmux_keyboard    = %s\n", c.tmux_keyboard ? "true" : "false");
+    fprintf(f, "# tmux_alt_keys: with that mode on, tmux stops recognising its own bindings,\n"
+               "# so Alt chords (Alt+Left, Alt+1, ...) are handed back to it rather than to the\n"
+               "# game. Any Alt chord bound in [hotkeys] is kept by rom.\n");
+    fprintf(f, "tmux_alt_keys    = %s\n", c.tmux_alt_keys ? "true" : "false");
     fprintf(f, "# recolor: off | hue | nearest | duotone | tint | dither\n");
     fprintf(f, "recolor          = %s\n", recolor_mode_name(c.recolor));
     fprintf(f, "recolor_strength = %.2f\n", c.recolor_strength);

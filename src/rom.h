@@ -87,6 +87,8 @@ typedef struct {
                                // at the cost of one frame of input latency
     bool     tmux_keyboard;    // under tmux, put the terminal into the kitty
                                // keyboard protocol for real key releases
+    bool     tmux_alt_keys;    // hand Alt chords to tmux's own key table
+                               // instead of the game
     CoreOption core_opt[MAX_CORE_OPTIONS];
     int        n_core_opt;
 } Config;
@@ -328,6 +330,11 @@ void input_kbd_push(Input *in);
 void input_kbd_pop(Input *in);
 // Drains pending input. Returns number of events written to `ev`.
 int  input_poll(Input *in, KeyEvent *ev, int max_ev);
+// The key in tmux's own spelling ("M-Left"), or NULL for one tmux cannot name.
+const char *tmux_key_name(uint32_t key);
+// Feeds `name` to tmux's key table as if it had been typed at the client, so
+// whatever is bound to it runs. Unbound keys do nothing.
+void input_send_tmux_key(const char *name);
 
 // ---------------------------------------------------------------- audio
 

@@ -1,7 +1,9 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "rom.h"
 
@@ -136,6 +138,63 @@ void input_shutdown(Input *in) {
     if (in->focus_events) (void)!write(in->ttyfd, "\x1b[?1004l", 8);
     in->kitty_kbd = false;
     in->focus_events = false;
+}
+
+// While the terminal underneath is speaking the kitty protocol, tmux no longer
+// recognises the reports its own bindings are made of, so an Alt chord that used
+// to switch windows lands in the game instead. `send-keys -K` puts it back:
+// unlike a plain send-keys, which types into a pane, -K hands the key to the
+// client and it is looked up in the client's key table exactly as if it had been
+// pressed at it. Whatever tmux binds is then tmux's business, blocks and all.
+static const struct { uint32_t key; const char *name; } tmux_names[] = {
+    { KEY_UP, "Up" }, { KEY_DOWN, "Down" }, { KEY_LEFT, "Left" },
+    { KEY_RIGHT, "Right" }, { KEY_HOME, "Home" }, { KEY_END, "End" },
+    { KEY_INSERT, "IC" }, { KEY_DELETE, "DC" }, { KEY_PGUP, "PPage" },
+    { KEY_PGDN, "NPage" }, { KEY_ESC, "Escape" }, { KEY_TAB, "Tab" },
+    { KEY_ENTER, "Enter" }, { KEY_BACKSPACE, "BSpace" }, { KEY_SPACE, "Space" },
+    { KEY_F1, "F1" }, { KEY_F2, "F2" }, { KEY_F3, "F3" }, { KEY_F4, "F4" },
+    { KEY_F5, "F5" }, { KEY_F6, "F6" }, { KEY_F7, "F7" }, { KEY_F8, "F8" },
+    { KEY_F9, "F9" }, { KEY_F10, "F10" }, { KEY_F11, "F11" }, { KEY_F12, "F12" },
+};
+
+const char *tmux_key_name(uint32_t key) {
+    static char buf[32];
+    uint32_t base = key & KEY_BASE_MASK;
+    const char *bn = NULL;
+    char one[2];
+
+    for (size_t i = 0; i < sizeof tmux_names / sizeof tmux_names[0]; i++)
+        if (tmux_names[i].key == base) { bn = tmux_names[i].name; break; }
+    if (!bn && base > 32 && base < 127) {
+        one[0] = (char)base;
+        one[1] = 0;
+        bn = one;
+    }
+    if (!bn) return NULL;   // a modifier on its own, or nothing tmux can name
+
+    snprintf(buf, sizeof buf, "%s%s%s",
+             (key & MOD_CTRL) ? "C-" : "", (key & MOD_ALT) ? "M-" : "", bn);
+    return buf;
+}
+
+void input_send_tmux_key(const char *name) {
+    // Fork twice so the grandchild is reparented and never needs reaping; the
+    // middle process exits at once, so the wait here does not stall a frame.
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        if (fork() == 0) {
+            int null = open("/dev/null", O_RDWR);
+            if (null >= 0) {
+                dup2(null, 0); dup2(null, 1); dup2(null, 2);
+                if (null > 2) close(null);
+            }
+            execlp("tmux", "tmux", "send-keys", "-K", name, (char *)NULL);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
 }
 
 // Parses one CSI sequence starting at buf[0]=='\x1b'. Returns bytes consumed,
