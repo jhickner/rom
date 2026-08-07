@@ -26,6 +26,10 @@ static const char *padnames[16] = {
     "a", "x", "l", "r", "l2", "r2", "l3", "r3"
 };
 
+static const char *stynames[STY_COUNT] = {
+    "stylus_up", "stylus_down", "stylus_left", "stylus_right", "stylus_touch"
+};
+
 static const char *hknames[HK_COUNT] = {
     "quit", "pause", "reset", "save_state", "load_state",
     "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor",
@@ -96,6 +100,13 @@ void config_defaults(Config *c) {
     c->pad[RETRO_DEVICE_ID_JOYPAD_R]      = 'w';
     c->pad[RETRO_DEVICE_ID_JOYPAD_START]  = KEY_ENTER;
     c->pad[RETRO_DEVICE_ID_JOYPAD_SELECT] = KEY_RSHIFT;
+
+    c->stylus[STY_UP]    = 'i';
+    c->stylus[STY_DOWN]  = 'k';
+    c->stylus[STY_LEFT]  = 'j';
+    c->stylus[STY_RIGHT] = 'l';
+    c->stylus[STY_TOUCH] = KEY_SPACE;
+    c->stylus_speed      = 4;
 
     // Quit deliberately takes a modifier: Escape is far too easy to hit by
     // reflex mid-game.
@@ -192,6 +203,13 @@ static int config_pass(Config *c, const char *path, const char *system,
                         fprintf(stderr, "config:%d: unknown key '%s'\n", lineno, v);
                     else c->pad[i] = key;
                 }
+            for (int i = 0; i < STY_COUNT; i++)
+                if (strcasecmp(k, stynames[i]) == 0) {
+                    uint32_t key = key_from_name(v);
+                    if (key == KEY_NONE)
+                        fprintf(stderr, "config:%d: unknown key '%s'\n", lineno, v);
+                    else c->stylus[i] = key;
+                }
         } else if (strcasecmp(section, "hotkeys") == 0) {
             for (int i = 0; i < HK_COUNT; i++) {
                 if (strcasecmp(k, hknames[i]) != 0) continue;
@@ -217,6 +235,7 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "show_stats") == 0) c->show_stats = parse_bool(v);
             else if (strcasecmp(k, "pause_on_unfocus") == 0) c->pause_on_unfocus = parse_bool(v);
             else if (strcasecmp(k, "hide_on_blur") == 0) c->hide_on_blur = parse_bool(v);
+            else if (strcasecmp(k, "stylus_speed") == 0) c->stylus_speed = atoi(v);
             else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
             else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
             else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
@@ -309,6 +328,13 @@ void config_print(const Config *c, const char *path) {
         if (k) printf("  %-22s %s\n", order[i].label, key_name(k));
     }
 
+    static const char *stydesc[STY_COUNT] = {
+        "Stylus up", "Stylus down", "Stylus left", "Stylus right", "Stylus tap"
+    };
+    printf("\nStylus (DS)\n");
+    for (int i = 0; i < STY_COUNT; i++)
+        if (c->stylus[i]) printf("  %-22s %s\n", stydesc[i], key_name(c->stylus[i]));
+
     printf("\nHotkeys\n");
     for (int i = 0; i < HK_COUNT; i++) {
         char keys[96];
@@ -333,6 +359,7 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
     printf("  %-22s %s\n", "hide_on_blur", c->hide_on_blur ? "true" : "false");
+    printf("  %-22s %d\n", "stylus_speed", c->stylus_speed);
     printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
     printf("  %-22s %.2f\n", "recolor_strength", c->recolor_strength);
 
@@ -357,6 +384,11 @@ int config_write_default(const char *path) {
     fprintf(f, "[pad]\n");
     for (int i = 0; i < 16; i++)
         if (c.pad[i]) fprintf(f, "%-8s = %s\n", padnames[i], key_name(c.pad[i]));
+    fprintf(f, "# The DS touchscreen: these walk a cursor over the bottom screen\n"
+               "# and tap it. Ignored by every other system.\n");
+    for (int i = 0; i < STY_COUNT; i++)
+        if (c.stylus[i])
+            fprintf(f, "%-13s = %s\n", stynames[i], key_name(c.stylus[i]));
     fprintf(f, "\n[hotkeys]\n");
     fprintf(f, "# Modifiers: Ctrl+ and Alt+. Comma-separated alternates allowed.\n");
     for (int i = 0; i < HK_COUNT; i++) {
@@ -375,6 +407,8 @@ int config_write_default(const char *path) {
     fprintf(f, "# hide_on_blur: erase the picture from the pane while another pane has the\n"
                "# focus, and draw it again on return.\n");
     fprintf(f, "hide_on_blur     = %s\n", c.hide_on_blur ? "true" : "false");
+    fprintf(f, "stylus_speed     = %d          # DS cursor pixels a frame\n",
+            c.stylus_speed);
     fprintf(f, "scale            = %d          # inline-mode integer zoom, 1-8\n", c.scale);
     fprintf(f, "# term_scale: the terminal stretches the image to the cell rect. Set false to\n"
                "# upscale here instead, which keeps pixel art blocky rather than letting the\n"
@@ -408,7 +442,7 @@ int config_write_default(const char *path) {
     fprintf(f,
         "\n"
         "# Per-platform overrides: suffix any section with a system name.\n"
-        "# Systems: snes nes gb gba genesis pce n64 doom wolf3d\n"
+        "# Systems: snes nes gb gba genesis pce n64 nds doom wolf3d\n"
         "# These are applied on top of the sections above, whatever the order.\n"
         "#\n"
         "# [options.gb]\n"

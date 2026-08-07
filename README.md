@@ -85,6 +85,7 @@ Cores you build yourself in this repository's `cores/` are copied there by
 | `.md` `.gen` `.smd` | `genesis_plus_gx_libretro` |
 | `.pce` | `mednafen_pce_fast_libretro` |
 | `.n64` `.z64` `.v64` | `mupen64plus_next_libretro` |
+| `.nds` | `desmume_libretro` |
 | `.wad` | `prboom_libretro` |
 | `.wl6` `.wl1` `.sod` `.sdm` `.n3d` | `ecwolf_libretro` |
 
@@ -97,6 +98,19 @@ N64 defaults to Mupen64Plus-Next's Angrylion renderer rather than its GL one.
 GLideN64 corrupts its texture cache and aborts a few seconds into a game on
 macOS/arm64, and at terminal resolutions the software renderer looks the same.
 Set `mupen64plus-rdp-plugin = gliden64` under `[core.n64]` to try it anyway.
+
+DS games arrive as both screens stacked, 256x384. DeSmuME boots them with its
+own HLE BIOS, so no DS BIOS or firmware files are needed. Its other screen
+layouts are core options: `desmume_screens_layout = top` under `[core.nds]`
+drops the bottom screen.
+
+The touchscreen is on the keyboard: `i` `j` `k` `l` walk a cursor over the
+bottom screen and Space taps it. Rebind them in `[pad]`, and set
+`stylus_speed` for how many pixels a frame the cursor moves.
+
+DeSmuME exposes no save RAM, so DS battery saves are the core's own: it writes
+`~/.config/rom/<game>.dsv` rather than using `~/.config/rom/saves/`. Save
+states are unaffected.
 
 This fork of prboom plays Heretic and Hexen as well as Doom, detecting which
 from the IWAD's lump table. Verified working: `doom.wad`, `doom1.wad`,
@@ -174,6 +188,8 @@ core version, say — is reported and skipped rather than being fatal.
 | `a` / `s` | Y / X |
 | `q` / `w` | L / R |
 | Enter / Right Shift | Start / Select |
+| `i` `j` `k` `l` | DS stylus cursor |
+| Space | DS stylus tap |
 | Ctrl+C or Ctrl+Q | Quit |
 | `p` | Pause |
 | F2 / F3 | Save / load state |
@@ -334,7 +350,7 @@ scale = 4
 ```
 
 Sections may be suffixed with `snes`, `nes`, `gb`, `gba`, `genesis`, `pce`,
-`n64`, `doom`, or `wolf3d` for system-specific overrides. Run
+`n64`, `nds`, `doom`, or `wolf3d` for system-specific overrides. Run
 `rom --keys <rom>` to see the effective settings.
 
 A `[core]` section passes libretro core options through untouched. The names

@@ -295,10 +295,36 @@ static void audio_sample_cb(int16_t l, int16_t r) {
 
 static void input_poll_cb(void) { /* polled in the main loop */ }
 
+static bool g_stylus;   // the loaded system has a touchscreen
+
+// DeSmuME walks its cursor by the stick deflection over a fixed acceleration
+// of 2048, so this value moves it stylus_speed pixels a frame. A keyboard has
+// no deflections in between, which is why the core's deadzone is set to zero.
+static int16_t stylus_axis(int neg, int pos) {
+    uint32_t kn = cfg.stylus[neg], kp = cfg.stylus[pos];
+    int v = ((kp && key_held(kp)) ? 1 : 0) - ((kn && key_held(kn)) ? 1 : 0);
+    if (!v) return 0;
+    long mag = (long)cfg.stylus_speed * 2048;
+    if (mag > 0x7fff) mag = 0x7fff;
+    if (mag < 0) mag = 0;
+    return (int16_t)(v * mag);
+}
+
 static int16_t input_state_cb(unsigned port, unsigned device,
                               unsigned index, unsigned id) {
-    if (port != 0 || device != RETRO_DEVICE_JOYPAD || index != 0) return 0;
+    if (port != 0) return 0;
+    if (g_stylus && device == RETRO_DEVICE_ANALOG &&
+        index == RETRO_DEVICE_INDEX_ANALOG_LEFT) {
+        if (id == RETRO_DEVICE_ID_ANALOG_X) return stylus_axis(STY_LEFT, STY_RIGHT);
+        if (id == RETRO_DEVICE_ID_ANALOG_Y) return stylus_axis(STY_UP, STY_DOWN);
+        return 0;
+    }
+    if (device != RETRO_DEVICE_JOYPAD || index != 0) return 0;
     if (id >= 16) return 0;
+    // DeSmuME presses the stylus down on R2, so the tap key reports as that.
+    if (g_stylus && id == RETRO_DEVICE_ID_JOYPAD_R2 && cfg.stylus[STY_TOUCH] &&
+        key_held(cfg.stylus[STY_TOUCH]))
+        return 1;
     uint32_t key = cfg.pad[id];
     return (key && key_held(key)) ? 1 : 0;
 }
@@ -739,6 +765,13 @@ static void on_fatal(int sig) {
 // with `rdp-plugin` under [core.n64] to try the GL renderer.
 #define N64_OPTS    "mupen64plus-rdp-plugin=angrylion"
 
+// DeSmuME drives the stylus from the left analog stick and taps it with R2,
+// which is what the [pad] stylus keys are wired to. Its deadzone would cut the
+// low end off a keyboard's all-or-nothing deflection, so it goes to zero and
+// stylus_speed sets the rate on its own.
+#define NDS_OPTS    "desmume_pointer_device_l=emulated " \
+                    "desmume_pointer_device_deadzone=0"
+
 
 static const CoreSpec CORES[] = {
     { "sfc smc fig", "snes",    "snes9x_libretro" CORE_EXT,
@@ -755,6 +788,9 @@ static const CoreSpec CORES[] = {
       "libretro/beetle-pce-fast-libretro", NULL, NULL, PCE_ARGS, NULL, NULL },
     { "n64 z64 v64", "n64",     "mupen64plus_next_libretro" CORE_EXT,
       "libretro/mupen64plus-libretro-nx",  NULL, NULL, N64_ARGS, N64_OPTS, NULL },
+    { "nds",         "nds",     "desmume_libretro" CORE_EXT,
+      "libretro/desmume",  "desmume/src/frontend/libretro", NULL, { NULL },
+      NDS_OPTS, NULL },
     { "wad",         "doom",    "prboom_libretro" CORE_EXT,
       "libretro/libretro-prboom",          NULL, NULL, { NULL }, NULL,
       "prboom.wad" },
@@ -995,6 +1031,11 @@ static int run_selftest(const char *core_path, const char *rom, int frames,
     if (core_load(&core, core_path) != 0) return 1;
     int ci = core_entry_for(rom);
     if (ci >= 0) config_apply_core_options(&cfg, CORES[ci].defopts);
+    g_stylus = strcmp(system_for_ext(rom), "nds") == 0;
+    // Cores that keep their own battery saves write them to the system
+    // directory; without one they land in whatever directory rom was run from.
+    ensure_dir(config_dir());
+    snprintf(g_sysdir, sizeof g_sysdir, "%s", config_dir());
     core.set_environment(env_cb);
     core.set_video_refresh(video_cb);
     core.set_audio_sample(audio_sample_cb);
@@ -1215,6 +1256,7 @@ int main(int argc, char **argv) {
     if (core_idx >= 0) config_apply_core_options(&cfg, CORES[core_idx].defopts);
     if (!file_exists(cfgpath)) config_write_default(cfgpath);
     const char *system = system_for_ext(rom);
+    g_stylus = strcmp(system, "nds") == 0;
     config_load(&cfg, cfgpath, system);
     if (recolor_mode >= 0) cfg.recolor = recolor_mode;
     if (strength_arg >= 0.0) cfg.recolor_strength = strength_arg;

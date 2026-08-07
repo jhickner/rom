@@ -71,8 +71,14 @@ typedef struct {
     char val[CORE_OPT_VAL_MAX];
 } CoreOption;
 
+// The DS touchscreen, driven from the keyboard: four directions walk a cursor
+// and one key taps it down.
+enum { STY_UP, STY_DOWN, STY_LEFT, STY_RIGHT, STY_TOUCH, STY_COUNT };
+
 typedef struct {
     uint32_t pad[16];        // indexed by RETRO_DEVICE_ID_JOYPAD_*
+    uint32_t stylus[STY_COUNT];
+    int      stylus_speed;     // cursor pixels a frame
     uint32_t hotkey[HK_COUNT][MAX_HOTKEY_KEYS];
     int      volume;           // 0..100
     bool     integer_scale;    // snap image to whole multiples of native size
