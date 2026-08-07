@@ -82,7 +82,10 @@ void gfx_init(void) {
     // Popping the keyboard protocol has to reach the terminal itself, so it
     // needs wrapping too; the cursor and alt screen are tmux's own business.
     n += gfx_wrap(g_restore + n, "\x1b[<u", 4);
-    const char *tail = "\x1b[?25h\x1b[?1049l";
+    // Mouse reporting is tmux's own mode, so it is turned off unwrapped along
+    // with the cursor and the alt screen. Disabling a mode that was never on
+    // costs nothing, which is why this needs no state to consult.
+    const char *tail = "\x1b[?1016l\x1b[?1006l\x1b[?1002l\x1b[?25h\x1b[?1049l";
     size_t tl = strlen(tail);
     memcpy(g_restore + n, tail, tl);
     g_restore_len = n + tl;
@@ -106,6 +109,18 @@ bool gfx_passthrough_ok(void) {
     pclose(p);
     if (!got) return false;
     return strncmp(buf, "on", 2) == 0 || strncmp(buf, "all", 3) == 0;
+}
+
+// tmux only asks the terminal for mouse events while its own mouse mode is on,
+// so without it a pane can enable reporting and never hear anything back.
+bool gfx_tmux_mouse_ok(void) {
+    if (!g_tmux) return true;
+    FILE *p = popen("tmux show -gv mouse 2>/dev/null", "r");
+    if (!p) return false;
+    char buf[32] = "";
+    bool got = fgets(buf, sizeof buf, p) != NULL;
+    pclose(p);
+    return got && strncmp(buf, "on", 2) == 0;
 }
 
 void gfx_delete_image(int fd) {

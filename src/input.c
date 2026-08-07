@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -15,6 +16,12 @@
 static uint8_t pend[256];
 static size_t  pendlen;
 static double  esc_since;   // when a lone ESC started waiting for a sequence
+
+// Latest mouse report, accumulated by the parser and handed to the caller as
+// state at the end of a poll.
+static int      m_x = 1, m_y = 1;
+static bool     m_down;
+static unsigned m_presses;
 
 static uint32_t map_tilde(int n) {
     switch (n) {
@@ -77,24 +84,51 @@ static void kbd_seq(int fd, const char *seq) {
     (void)!write(fd, buf, n);
 }
 
-static bool probe_kitty_kbd(int fd) {
-    kbd_seq(fd, "\x1b[?u");
+// Collects a reply up to and including `final`, or until the terminal has had
+// long enough to answer. NUL-terminates and returns the byte count.
+static size_t read_reply(int fd, char *buf, size_t cap, char final) {
     struct pollfd p = { .fd = fd, .events = POLLIN };
-    char buf[64];
     size_t got = 0;
     double deadline = now_sec() + 0.3;
-    while (got < sizeof buf - 1) {
+    while (got < cap - 1) {
         double left = deadline - now_sec();
         if (left <= 0) break;
         if (poll(&p, 1, (int)(left * 1000)) <= 0) break;
-        ssize_t n = read(fd, buf + got, sizeof buf - 1 - got);
+        ssize_t n = read(fd, buf + got, cap - 1 - got);
         if (n <= 0) break;
         got += (size_t)n;
-        buf[got] = 0;
-        if (memchr(buf, 'u', got)) break;
+        if (memchr(buf, final, got)) break;
     }
     buf[got] = 0;
+    return got;
+}
+
+static bool probe_kitty_kbd(int fd) {
+    kbd_seq(fd, "\x1b[?u");
+    char buf[64];
+    size_t got = read_reply(fd, buf, sizeof buf, 'u');
     return got >= 3 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == '?';
+}
+
+// DECRQM. The reply is CSI ? <mode> ; <state> $ y, where state 0 means the
+// terminal does not know the mode - which is the answer that matters, since a
+// mode it ignores is also one it will never report in.
+static bool have_mode(int fd, int mode) {
+    char q[24];
+    int n = snprintf(q, sizeof q, "\x1b[?%d$p", mode);
+    if (n <= 0) return false;
+    (void)!write(fd, q, (size_t)n);
+    char buf[64];
+    size_t got = read_reply(fd, buf, sizeof buf, 'y');
+    // Matched whole rather than scanned for the state: a keystroke landing in
+    // the read window is also a CSI sequence with numbers in it, and reading a
+    // yes out of one would leave us decoding cells as pixels.
+    char want[24];
+    int wn = snprintf(want, sizeof want, "\x1b[?%d;", mode);
+    if (wn <= 0 || got < (size_t)wn || memcmp(buf, want, (size_t)wn) != 0)
+        return false;
+    int state = atoi(buf + wn);
+    return state == 1 || state == 2;
 }
 
 int input_init(Input *in, int ttyfd, bool allow_tmux_kbd) {
@@ -133,11 +167,40 @@ void input_kbd_pop(Input *in) {
     in->kbd_active = false;
 }
 
+// Unlike the keyboard protocol, mouse reporting is tmux's own mode: it decides
+// per pane whether an event is a pane switch or something to forward, and it
+// only asks the terminal for events at all once a pane has asked it for them.
+// So these go out plain, and inside tmux they need `set -g mouse on` to lead
+// anywhere.
+void input_mouse_enable(Input *in) {
+    // 1002 is press, release, and motion while a button is down - a stylus,
+    // without the hover flood 1003 would add. 1006 is the extended encoding,
+    // without which coordinates stop at column 223.
+    (void)!write(in->ttyfd, "\x1b[?1002h\x1b[?1006h", 16);
+    in->mouse = true;
+    // Pixel coordinates where they are on offer, which is the difference
+    // between touching a pixel and touching a cell. tmux parses the reports
+    // itself and only speaks cells, so it is never asked.
+    if (!gfx_tmux() && have_mode(in->ttyfd, 1016)) {
+        (void)!write(in->ttyfd, "\x1b[?1016h", 8);
+        in->mouse_pixels = true;
+    }
+}
+
+// A button released outside the pane may never be reported, so the button is
+// dropped wherever a release would have been missed rather than left down.
+void input_mouse_reset(Input *in) {
+    m_down = false;
+    in->mouse_down = false;
+}
+
 void input_shutdown(Input *in) {
     input_kbd_pop(in);
     if (in->focus_events) (void)!write(in->ttyfd, "\x1b[?1004l", 8);
+    if (in->mouse) (void)!write(in->ttyfd, "\x1b[?1016l\x1b[?1006l\x1b[?1002l", 24);
     in->kitty_kbd = false;
     in->focus_events = false;
+    in->mouse = false;
 }
 
 // While the terminal underneath is speaking the kitty protocol, tmux no longer
@@ -226,6 +289,8 @@ static size_t parse_csi(const uint8_t *buf, size_t len, KeyEvent *ev, bool *got)
         return 1;
     }
     size_t i = 2;
+    char priv = 0;
+    if (buf[2] == '?' || buf[2] == '<' || buf[2] == '>') priv = (char)buf[2];
     while (i < len && ((buf[i] >= '0' && buf[i] <= '9') || buf[i] == ';' ||
                        buf[i] == ':' || buf[i] == '?' || buf[i] == '<' ||
                        buf[i] == '>'))
@@ -255,6 +320,22 @@ static size_t parse_csi(const uint8_t *buf, size_t len, KeyEvent *ev, bool *got)
         // '?', '<', '>' are private markers; ignore
     }
     if (gi < 4 && si < 3 && have) groups[gi][si] = acc;
+
+    // SGR mouse: CSI < btn ; col ; row M for a press or a drag, m for a
+    // release. Left button only - bit 6 marks the wheel, bit 5 motion, and the
+    // low two bits the button, so a wheel tick or a right-click is dropped
+    // rather than dragged across the touchscreen.
+    if (priv == '<' && (final == 'M' || final == 'm')) {
+        int b = groups[0][0] >= 0 ? groups[0][0] : 0;
+        int x = groups[1][0], y = groups[2][0];
+        if (x > 0 && y > 0 && !(b & 0x40) && (b & 0x03) == 0) {
+            m_x = x;
+            m_y = y;
+            if (final == 'M' && !m_down) m_presses++;
+            m_down = (final == 'M');
+        }
+        return i + 1;
+    }
 
     int keycode = groups[0][0] >= 0 ? groups[0][0] : 1;
     int mods    = groups[1][0] >= 0 ? groups[1][0] : 1;
@@ -343,5 +424,10 @@ int input_poll(Input *in, KeyEvent *ev, int max_ev) {
     } else {
         esc_since = 0.0;
     }
+
+    in->mouse_down = m_down;
+    in->mouse_x = m_x;
+    in->mouse_y = m_y;
+    in->mouse_presses = m_presses;
     return nev;
 }

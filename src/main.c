@@ -297,6 +297,17 @@ static void input_poll_cb(void) { /* polled in the main loop */ }
 
 static bool g_stylus;   // the loaded system has a touchscreen
 
+// Where the picture sits on the terminal, in pixels, for turning a mouse
+// report back into a point on the frame. Kept by recompute_layout.
+static int g_cell_w = 8, g_cell_h = 16;
+static int g_img_x, g_img_y;         // 0-based pixel origin
+static int g_img_w, g_img_h;         // on-screen pixel size
+
+static int16_t g_touch_x, g_touch_y;
+static bool    g_touch_down;
+static double  g_touch_until;        // floor under a tap shorter than a frame
+static unsigned g_last_presses;
+
 // DeSmuME walks its cursor by the stick deflection over a fixed acceleration
 // of 2048, so this value moves it stylus_speed pixels a frame. A keyboard has
 // no deflections in between, which is why the core's deadzone is set to zero.
@@ -310,9 +321,61 @@ static int16_t stylus_axis(int neg, int pos) {
     return (int16_t)(v * mag);
 }
 
+// A mouse report gives a point on the terminal; the core wants one on the
+// frame, as a position in the -0x8000..0x7fff pointer space that spans the
+// whole picture. Both DS screens live in that space - DeSmuME drops anything
+// that does not land on the touchscreen half - so no screen layout is assumed
+// here, and a press only counts while it is inside the image.
+static void update_touch(void) {
+    if (!input.mouse) return;
+
+    int px, py;
+    if (input.mouse_pixels) {
+        px = input.mouse_x - 1;
+        py = input.mouse_y - 1;
+    } else {
+        // A cell report names a cell rather than a point in it, so aim at the
+        // middle: it halves the worst-case error, which under tmux - where
+        // nothing finer is on offer - is most of a cell.
+        px = (input.mouse_x - 1) * g_cell_w + g_cell_w / 2;
+        py = (input.mouse_y - 1) * g_cell_h + g_cell_h / 2;
+    }
+
+    // A click that begins and ends between two frames would otherwise never be
+    // seen down at all, so a press holds the touch for a few frames.
+    if (input.mouse_presses != g_last_presses) {
+        g_last_presses = input.mouse_presses;
+        g_touch_until = now_sec() + 0.05;
+    }
+    if (!(input.mouse_down || now_sec() < g_touch_until) ||
+        g_img_w <= 0 || g_img_h <= 0) {
+        g_touch_down = false;
+        return;
+    }
+
+    double fx = (px - g_img_x) / (double)g_img_w;
+    double fy = (py - g_img_y) / (double)g_img_h;
+    if (fx < 0.0 || fx >= 1.0 || fy < 0.0 || fy >= 1.0) {
+        g_touch_down = false;
+        return;
+    }
+    g_touch_x = (int16_t)(fx * 0x10000 - 0x8000);
+    g_touch_y = (int16_t)(fy * 0x10000 - 0x8000);
+    g_touch_down = true;
+}
+
 static int16_t input_state_cb(unsigned port, unsigned device,
                               unsigned index, unsigned id) {
     if (port != 0) return 0;
+    if (g_stylus && device == RETRO_DEVICE_POINTER && index == 0) {
+        switch (id) {
+        case RETRO_DEVICE_ID_POINTER_X:       return g_touch_x;
+        case RETRO_DEVICE_ID_POINTER_Y:       return g_touch_y;
+        case RETRO_DEVICE_ID_POINTER_PRESSED: return g_touch_down ? 1 : 0;
+        case RETRO_DEVICE_ID_POINTER_COUNT:   return g_touch_down ? 1 : 0;
+        }
+        return 0;
+    }
     if (g_stylus && device == RETRO_DEVICE_ANALOG &&
         index == RETRO_DEVICE_INDEX_ANALOG_LEFT) {
         if (id == RETRO_DEVICE_ID_ANALOG_X) return stylus_axis(STY_LEFT, STY_RIGHT);
@@ -441,6 +504,16 @@ static void recompute_layout(void) {
         max_send_w = l.cols * cw;
         max_send_h = l.rows * ch;
     }
+
+    // With c=/r= the terminal stretches the image to fill the cell rect, and
+    // under tmux the placeholder cells are the placement, so it always does.
+    // Only a natural placement is exactly its own pixel size.
+    g_cell_w = cw;
+    g_cell_h = ch;
+    g_img_x = (l.x - 1) * cw;
+    g_img_y = (l.y - 1) * ch;
+    g_img_w = (l.natural && !gfx_tmux()) ? max_send_w : l.cols * cw;
+    g_img_h = (l.natural && !gfx_tmux()) ? max_send_h : l.rows * ch;
 
     renderer_set_layout(&rend, &l);
     logmsg("layout: %s %dx%d cells at (%d,%d) natural=%d scale=%d send<=%dx%d",
@@ -641,6 +714,11 @@ static void handle_input(void) {
                 // every key rather than leaving Link walking into a wall.
                 memset(held_ascii, 0, sizeof held_ascii);
                 memset(held_spec, 0, sizeof held_spec);
+                // Same for the stylus: a drag that ends over another pane
+                // reports its release there, or nowhere.
+                input_mouse_reset(&input);
+                g_touch_down = false;
+                g_touch_until = 0;
             }
             // Under tmux the keyboard mode belongs to the terminal, which every
             // pane shares, so hand it back while someone else has the focus.
@@ -701,6 +779,7 @@ static void handle_input(void) {
         }
     }
     if (g_infer_release) expire_held();
+    if (g_stylus) update_touch();
     fast_forward = hotkey_held(HK_FAST_FORWARD);
 }
 
@@ -769,8 +848,16 @@ static void on_fatal(int sig) {
 // which is what the [pad] stylus keys are wired to. Its deadzone would cut the
 // low end off a keyboard's all-or-nothing deflection, so it goes to zero and
 // stylus_speed sets the rate on its own.
+//
+// `touch` puts the other route - the mouse - on the absolute libretro pointer
+// rather than on relative mouse deltas, so a click lands where it was aimed.
+// The two coexist: the core takes the pointer position while it is pressed and
+// keeps the walked cursor otherwise. An unset option leaves the core on its own
+// compiled-in default, which for the pointer is off, so it is named explicitly.
 #define NDS_OPTS    "desmume_pointer_device_l=emulated " \
-                    "desmume_pointer_device_deadzone=0"
+                    "desmume_pointer_device_deadzone=0 " \
+                    "desmume_pointer_mouse=enabled " \
+                    "desmume_pointer_type=touch"
 
 
 static const CoreSpec CORES[] = {
@@ -1443,6 +1530,17 @@ int main(int argc, char **argv) {
            theme.bg[0], theme.bg[1], theme.bg[2],
            theme.bg_from_terminal ? "" : " (fallback)",
            theme.fg[0], theme.fg[1], theme.fg[2]);
+
+    // After the queries above, whose read windows would otherwise swallow the
+    // first mouse report, and only for a system with something to point at:
+    // while reporting is on the terminal's own click-drag selection is ours.
+    if (g_stylus && cfg.mouse) {
+        input_mouse_enable(&input);
+        logmsg("mouse: on, %s coordinates%s",
+               input.mouse_pixels ? "pixel" : "cell",
+               gfx_tmux() && !gfx_tmux_mouse_ok()
+                   ? " (tmux has mouse off - no events will arrive)" : "");
+    }
     if (cfg.recolor != RECOLOR_OFF) {
         double t0 = now_sec();
         if (recolor_build(&recolor, cfg.recolor, &theme, cfg.recolor_strength) != 0)

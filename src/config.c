@@ -107,6 +107,7 @@ void config_defaults(Config *c) {
     c->stylus[STY_RIGHT] = 'l';
     c->stylus[STY_TOUCH] = KEY_SPACE;
     c->stylus_speed      = 4;
+    c->mouse             = true;
 
     // Quit deliberately takes a modifier: Escape is far too easy to hit by
     // reflex mid-game.
@@ -236,6 +237,7 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "pause_on_unfocus") == 0) c->pause_on_unfocus = parse_bool(v);
             else if (strcasecmp(k, "hide_on_blur") == 0) c->hide_on_blur = parse_bool(v);
             else if (strcasecmp(k, "stylus_speed") == 0) c->stylus_speed = atoi(v);
+            else if (strcasecmp(k, "mouse") == 0) c->mouse = parse_bool(v);
             else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
             else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
             else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
@@ -360,6 +362,7 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
     printf("  %-22s %s\n", "hide_on_blur", c->hide_on_blur ? "true" : "false");
     printf("  %-22s %d\n", "stylus_speed", c->stylus_speed);
+    printf("  %-22s %s\n", "mouse", c->mouse ? "true" : "false");
     printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
     printf("  %-22s %.2f\n", "recolor_strength", c->recolor_strength);
 
@@ -409,6 +412,10 @@ int config_write_default(const char *path) {
     fprintf(f, "hide_on_blur     = %s\n", c.hide_on_blur ? "true" : "false");
     fprintf(f, "stylus_speed     = %d          # DS cursor pixels a frame\n",
             c.stylus_speed);
+    fprintf(f, "# mouse: touch the DS screen by clicking and dragging on it. Only ever on\n"
+               "# for a DS game, and while it is on the terminal's own click-drag selection\n"
+               "# belongs to rom. Inside tmux this also needs `set -g mouse on`.\n");
+    fprintf(f, "mouse            = %s\n", c.mouse ? "true" : "false");
     fprintf(f, "scale            = %d          # inline-mode integer zoom, 1-8\n", c.scale);
     fprintf(f, "# term_scale: the terminal stretches the image to the cell rect. Set false to\n"
                "# upscale here instead, which keeps pixel art blocky rather than letting the\n"

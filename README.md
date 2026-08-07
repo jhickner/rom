@@ -104,7 +104,20 @@ own HLE BIOS, so no DS BIOS or firmware files are needed. Its other screen
 layouts are core options: `desmume_screens_layout = top` under `[core.nds]`
 drops the bottom screen.
 
-The touchscreen is on the keyboard: `i` `j` `k` `l` walk a cursor over the
+The touchscreen takes the mouse: click and drag on the bottom screen to touch
+it. Where the terminal reports pixel coordinates a tap lands on the pixel it
+was aimed at; where it reports cells — inside tmux, which speaks nothing else —
+it lands within half a cell, so raise `scale` for finer work. Reporting is only
+turned on for a DS game, and while it is on the terminal's own click-drag
+selection belongs to `rom`. Hold Shift to get it back for a drag, or turn it
+off:
+
+```ini
+[options]
+mouse = false
+```
+
+The touchscreen is also on the keyboard: `i` `j` `k` `l` walk a cursor over the
 bottom screen and Space taps it. Rebind them in `[pad]`, and set
 `stylus_speed` for how many pixels a frame the cursor moves.
 
@@ -188,6 +201,7 @@ core version, say — is reported and skipped rather than being fatal.
 | `a` / `s` | Y / X |
 | `q` / `w` | L / R |
 | Enter / Right Shift | Start / Select |
+| Click / drag | DS stylus |
 | `i` `j` `k` `l` | DS stylus cursor |
 | Space | DS stylus tap |
 | Ctrl+C or Ctrl+Q | Quit |
@@ -214,6 +228,17 @@ tmux set -g allow-passthrough all      # add to ~/.tmux.conf to keep it
 
 Without it every graphics escape is swallowed, and `rom` says so rather than
 drawing nothing.
+
+The DS stylus needs a second setting:
+
+```sh
+tmux set -g mouse on
+```
+
+tmux only asks the terminal for mouse events while its own mouse mode is on,
+and it forwards them to whichever pane has enabled reporting. It parses the
+reports itself and speaks only cell coordinates, so a tap inside tmux lands
+within half a cell of where it was aimed rather than on the pixel.
 
 tmux cannot be shown an image at the cursor — it neither tracks nor redraws one,
 so the picture would survive until the first redraw and then vanish. Instead the
@@ -344,6 +369,7 @@ recolor          = hue
 recolor_strength = 1.00
 pause_on_unfocus = true
 hide_on_blur     = false
+mouse            = true
 
 [options.gb]
 scale = 4
@@ -388,6 +414,6 @@ is autosaved every five seconds when changed.
 - In tmux, key releases need a terminal that speaks the kitty keyboard protocol
 - GL cores on macOS only; Linux is software-rendered until an EGL backend lands
 - No Vulkan cores
-- Player 1 keyboard input only
+- Player 1 only, from the keyboard and mouse
 
 Licensed under the [MIT License](LICENSE).

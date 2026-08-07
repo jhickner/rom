@@ -72,13 +72,14 @@ typedef struct {
 } CoreOption;
 
 // The DS touchscreen, driven from the keyboard: four directions walk a cursor
-// and one key taps it down.
+// and one key taps it down. The mouse drives the same touchscreen directly.
 enum { STY_UP, STY_DOWN, STY_LEFT, STY_RIGHT, STY_TOUCH, STY_COUNT };
 
 typedef struct {
     uint32_t pad[16];        // indexed by RETRO_DEVICE_ID_JOYPAD_*
     uint32_t stylus[STY_COUNT];
     int      stylus_speed;     // cursor pixels a frame
+    bool     mouse;            // touch the DS screen with the mouse
     uint32_t hotkey[HK_COUNT][MAX_HOTKEY_KEYS];
     int      volume;           // 0..100
     bool     integer_scale;    // snap image to whole multiples of native size
@@ -298,6 +299,8 @@ void gfx_init(void);
 bool gfx_tmux(void);
 // True when tmux will forward our escapes to the terminal it is running in.
 bool gfx_passthrough_ok(void);
+// True when tmux will forward mouse events to the pane. Always true outside it.
+bool gfx_tmux_mouse_ok(void);
 // Appends one graphics APC escape: `head` is the control data, `payload` the
 // base64 body (omitted when `plen` is 0). Returns bytes written.
 size_t gfx_apc(char *out, const char *head, const char *payload, size_t plen);
@@ -322,6 +325,13 @@ typedef struct {
     bool     kitty_kbd;
     bool     kbd_active;    // the protocol is currently pushed on the terminal
     bool     focus_events;
+    // Mouse reports are state, not events: input_poll leaves the latest here
+    // rather than in the queue.
+    bool     mouse;         // tracking is on
+    bool     mouse_pixels;  // positions are pixels rather than cells
+    bool     mouse_down;    // left button, as of the last report
+    int      mouse_x, mouse_y;   // 1-based, in whichever unit mouse_pixels says
+    unsigned mouse_presses; // button-down edges seen, for taps inside one frame
 } Input;
 
 typedef struct {
@@ -339,6 +349,12 @@ void input_shutdown(Input *in);
 // take it back on return. No-ops when the protocol is not in use.
 void input_kbd_push(Input *in);
 void input_kbd_pop(Input *in);
+// Starts mouse reporting, in pixel coordinates where the terminal offers them.
+// Costs the terminal's own click-drag selection for as long as it is on, so it
+// is only turned on for a system that has something to point at.
+void input_mouse_enable(Input *in);
+// Forgets a button that is still down, for when its release will never arrive.
+void input_mouse_reset(Input *in);
 // Drains pending input. Returns number of events written to `ev`.
 int  input_poll(Input *in, KeyEvent *ev, int max_ev);
 // The key in tmux's own spelling ("M-Left"), or NULL for one tmux cannot name.
