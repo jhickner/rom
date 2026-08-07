@@ -82,35 +82,54 @@ static int writeall(int fd, const char *p, size_t n) {
     return 0;
 }
 
-// Assemble the full chunked transmission for one frame into `out`. When
-// `natural` is set the c=/r= fields are omitted, which tells the terminal to
-// draw the image at exactly its pixel size instead of stretching it to a cell
-// rect.
+static void draw_outline(uint8_t *rgb, int w, int h, int band) {
+    static const uint8_t hue[4][3] = {
+        { 255, 32, 32 }, { 32, 255, 32 }, { 64, 160, 255 }, { 255, 255, 32 }
+    };
+    const uint8_t *c = hue[band & 3];
+    for (int x = 0; x < w; x++) {
+        memcpy(rgb + (size_t)x * 3, c, 3);
+        memcpy(rgb + ((size_t)(h - 1) * w + x) * 3, c, 3);
+    }
+    for (int y = 0; y < h; y++) {
+        memcpy(rgb + (size_t)y * w * 3, c, 3);
+        memcpy(rgb + ((size_t)y * w + w - 1) * 3, c, 3);
+    }
+}
+
+// Assemble the chunked transmission for one band into `out`; a picture sent
+// whole is band 0 of 1. `natural` omits c=/r=, which draws the image at its own
+// pixel size rather than stretching it to a cell rect; bands always stretch.
 //
 // Under tmux the image is transmitted without a placement (a=t) and then given
 // a virtual one (U=1), which draws nothing by itself: the placeholder cells
-// already on screen are what the terminal fills in. Everything is re-sent each
-// frame because replacing an image id also drops its placements.
-static size_t build_frame(char *out, const char *b64, size_t blen,
-                          int w, int h, const Layout *l) {
+// already on screen are what the terminal fills in. The placement is re-sent
+// every time because replacing an image id also drops its placements.
+static size_t build_band(char *out, const char *b64, size_t blen,
+                         int w, int bh, const Layout *l, int band) {
     size_t o = 0, off = 0;
     int first = 1;
     char head[96];
     bool tmux = gfx_tmux();
+    int id = GFX_IMAGE_ID + band;
+    int cy0, cy1;
+    layout_band_cells(l, band, &cy0, &cy1);
+    int brows = cy1 - cy0;
+    bool natural = l->natural && l->bands <= 1;
 
-    if (!tmux) o += (size_t)sprintf(out + o, "\x1b[%d;%dH", l->y, l->x);
+    if (!tmux) o += (size_t)sprintf(out + o, "\x1b[%d;%dH", l->y + cy0, l->x);
     while (off < blen) {
         size_t n = blen - off;
         if (n > CHUNK) n = CHUNK;
         int more = (off + n < blen);
         if (first && tmux) {
             sprintf(head, "a=t,f=24,s=%d,v=%d,i=%d,q=2,m=%d;",
-                    w, h, GFX_IMAGE_ID, more);
+                    w, bh, id, more);
         } else if (first) {
             int p = sprintf(head, "a=T,f=24,s=%d,v=%d,i=%d,p=1,q=2,C=1",
-                            w, h, GFX_IMAGE_ID);
-            if (!l->natural)
-                p += sprintf(head + p, ",c=%d,r=%d", l->cols, l->rows);
+                            w, bh, id);
+            if (!natural)
+                p += sprintf(head + p, ",c=%d,r=%d", l->cols, brows);
             sprintf(head + p, ",m=%d;", more);
         } else {
             sprintf(head, "m=%d;", more);
@@ -121,7 +140,7 @@ static size_t build_frame(char *out, const char *b64, size_t blen,
     }
     if (tmux) {
         sprintf(head, "a=p,U=1,i=%d,p=1,c=%d,r=%d,q=2",
-                GFX_IMAGE_ID, l->cols, l->rows);
+                id, l->cols, brows);
         o += gfx_apc(out + o, head, NULL, 0);
     }
     return o;
@@ -199,10 +218,15 @@ static void *render_thread(void *arg) {
     char *b64 = NULL, *msg = NULL;
     size_t b64cap = 0, msgcap = 0;
     char osd[OSD_MSG_MAX], status[256], sbuf[512];
+    char bsu[64], esu[64];
+    size_t bsulen = gfx_wrap(bsu, "\x1b[?2026h", 8);
+    size_t esulen = gfx_wrap(esu, "\x1b[?2026l", 8);
 
     for (;;) {
         size_t wrote = 0;
         double wsec = 0.0;
+        unsigned sent_bands = 0;
+        int nb = 1;
 
         pthread_mutex_lock(&r->m);
         while (r->ready < 0 && !r->status_only && r->running)
@@ -243,10 +267,11 @@ static void *render_thread(void *arg) {
         r->busy = idx;
         int w = r->w[idx], h = r->h[idx];
         Layout l = r->layout;
-        bool clear = r->layout_dirty && l.allow_clear;
+        bool relayout = r->layout_dirty;
+        bool clear = relayout && l.allow_clear;
         // The placeholder cells are the placement under tmux, so a new layout
         // means laying them down again over the new rectangle.
-        bool place = r->layout_dirty && gfx_tmux();
+        bool place = relayout && gfx_tmux();
         r->layout_dirty = false;
         double t = now_sec();
         snprintf(osd, sizeof osd, "%s", r->osd_until > t ? r->osd : "");
@@ -261,30 +286,89 @@ static void *render_thread(void *arg) {
             if (!nb) goto release;
             b64 = nb; b64cap = need_b64;
         }
-        // Worst case: one wrapped escape per chunk, plus the placement escape
-        // and cursor moves.
-        size_t need_msg = need_b64 + (need_b64 / CHUNK + 2) * gfx_apc_max(0) + 256;
+        // Worst case: every band changed, one wrapped escape per chunk plus a
+        // placement and a cursor move each.
+        size_t need_msg = need_b64 + (need_b64 / CHUNK + 2) * gfx_apc_max(0) +
+                          (size_t)GFX_MAX_BANDS * (gfx_apc_max(0) + 64) + 256;
         if (need_msg > msgcap) {
             char *nm = realloc(msg, need_msg);
             if (!nm) goto release;
             msg = nm; msgcap = need_msg;
         }
 
+        nb = l.bands > 1 ? l.bands : 1;
+        // Stretched bands must divide evenly; an exact picture only has to
+        // still fill the cell rect it was padded to.
+        if (nb > 1) {
+            if (l.exact) {
+                if (h != l.rows * l.cell_h) nb = 1;
+            } else if (h % nb || l.rows % nb) {
+                nb = 1;
+            }
+        }
+        l.bands = nb;
+        bool all = relayout || !r->shown ||
+                   r->shown_w != w || r->shown_h != h || r->shown_bands != nb;
+        if (r->shown_cap < raw) {
+            uint8_t *ns = realloc(r->shown, raw);
+            if (!ns) goto release;
+            r->shown = ns;
+            r->shown_cap = raw;
+            all = true;
+        }
+
         pthread_mutex_lock(&r->wm);
         if (hidden_now(r)) { pthread_mutex_unlock(&r->wm); goto release; }
+        // DECSET 2026, synchronized output.
+        bool sync = nb > 1 && gfx_sync();
+        if (sync) (void)writeall(r->ttyfd, bsu, bsulen);
         if (clear) (void)writeall(r->ttyfd, "\x1b[2J", 4);
         if (place) gfx_write_placeholders(r->ttyfd, &l);
 
-        size_t blen = b64enc(src, raw, b64);
-        size_t n = build_frame(msg, b64, blen, w, h, &l);
+        size_t n = 0;
+        size_t stride = (size_t)w * 3;
+        bool debug = l.debug && nb > 1;
+        for (int b = 0; b < nb; b++) {
+            int py0, py1;
+            layout_band_rows(&l, b, h, &py0, &py1);
+            size_t off = (size_t)py0 * stride, len = (size_t)(py1 - py0) * stride;
+            bool changed = all || memcmp(r->shown + off, src + off, len) != 0;
+            // An outline drawn last frame stays on screen until the band is
+            // sent again, so an unchanged one goes out clean to erase it.
+            bool erase = r->outlined[b] && !changed;
+            if (!changed && !erase) continue;
+
+            const uint8_t *payload = src + off;
+            if (debug && changed) {
+                if (r->band_cap < len) {
+                    uint8_t *nbuf = realloc(r->band, len);
+                    if (nbuf) { r->band = nbuf; r->band_cap = len; }
+                }
+                if (r->band_cap >= len) {
+                    memcpy(r->band, src + off, len);
+                    draw_outline(r->band, w, py1 - py0, b);
+                    payload = r->band;
+                }
+            }
+            size_t blen = b64enc(payload, len, b64);
+            n += build_band(msg + n, b64, blen, w, py1 - py0, &l, b);
+            if (changed) memcpy(r->shown + off, src + off, len);
+            r->outlined[b] = debug && changed;
+            sent_bands++;
+        }
+        r->shown_w = w;
+        r->shown_h = h;
+        r->shown_bands = nb;
+
         double w0 = now_sec();
-        if (writeall(r->ttyfd, msg, n) == 0) {
+        if (n == 0 || writeall(r->ttyfd, msg, n) == 0) {
             wrote = n;
             draw_status(&l, sbuf, sizeof sbuf, osd, status);
             size_t sn = strlen(sbuf);
             (void)writeall(r->ttyfd, sbuf, sn);
             wrote += sn;
         }
+        if (sync) (void)writeall(r->ttyfd, esu, esulen);
         wsec = now_sec() - w0;
         pthread_mutex_unlock(&r->wm);
 
@@ -294,6 +378,8 @@ static void *render_thread(void *arg) {
         r->sent++;
         r->bytes += wrote;
         r->write_sec += wsec;
+        r->bands_sent += sent_bands;
+        r->bands_total += (unsigned)nb;
         pthread_cond_broadcast(&r->cv);
         pthread_mutex_unlock(&r->m);
     }
@@ -326,6 +412,8 @@ void renderer_stop(Renderer *r) {
     pthread_mutex_unlock(&r->m);
     pthread_join(r->thread, NULL);
     for (int i = 0; i < RB_COUNT; i++) free(r->buf[i]);
+    free(r->shown);
+    free(r->band);
     pthread_mutex_destroy(&r->wm);
     pthread_mutex_destroy(&r->m);
     pthread_cond_destroy(&r->cv);

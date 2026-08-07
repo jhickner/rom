@@ -110,19 +110,16 @@ static bool probe_kitty_kbd(int fd) {
     return got >= 3 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == '?';
 }
 
-// DECRQM. The reply is CSI ? <mode> ; <state> $ y, where state 0 means the
-// terminal does not know the mode - which is the answer that matters, since a
-// mode it ignores is also one it will never report in.
+// DECRQM. The reply is CSI ? <mode> ; <state> $ y, with state 0 for a mode the
+// terminal does not know.
 static bool have_mode(int fd, int mode) {
-    char q[24];
+    char q[24], w[64];
     int n = snprintf(q, sizeof q, "\x1b[?%d$p", mode);
     if (n <= 0) return false;
-    (void)!write(fd, q, (size_t)n);
+    size_t qn = gfx_wrap(w, q, (size_t)n);
+    (void)!write(fd, w, qn);
     char buf[64];
     size_t got = read_reply(fd, buf, sizeof buf, 'y');
-    // Matched whole rather than scanned for the state: a keystroke landing in
-    // the read window is also a CSI sequence with numbers in it, and reading a
-    // yes out of one would leave us decoding cells as pixels.
     char want[24];
     int wn = snprintf(want, sizeof want, "\x1b[?%d;", mode);
     if (wn <= 0 || got < (size_t)wn || memcmp(buf, want, (size_t)wn) != 0)
@@ -172,6 +169,10 @@ void input_kbd_pop(Input *in) {
 // only asks the terminal for events at all once a pane has asked it for them.
 // So these go out plain, and inside tmux they need `set -g mouse on` to lead
 // anywhere.
+bool input_probe_mode(int ttyfd, int mode) {
+    return have_mode(ttyfd, mode);
+}
+
 void input_mouse_enable(Input *in) {
     // 1002 is press, release, and motion while a button is down - a stylus,
     // without the hover flood 1003 would add. 1006 is the extended encoding,

@@ -9,14 +9,15 @@
 // The codepoint kitty reserves for image placeholder cells.
 #define PLACEHOLDER_CP 0x10EEEEu
 
-// Control data for dropping our image. The id has to reach the terminal in
-// decimal, so it is formatted rather than stringified from the macro.
-static void delete_head(char *out, size_t cap) {
-    snprintf(out, cap, "a=d,d=I,i=%d,q=2", GFX_IMAGE_ID);
+// Control data for dropping one of our images. The id has to reach the terminal
+// in decimal, so it is formatted rather than stringified from the macro.
+static void delete_head(char *out, size_t cap, int band) {
+    snprintf(out, cap, "a=d,d=I,i=%d,q=2", GFX_IMAGE_ID + band);
 }
 
 static bool   g_tmux;
-static char   g_restore[160];
+static bool   g_sync;
+static char   g_restore[2048];
 static size_t g_restore_len;
 
 static int writeall(int fd, const char *p, size_t n) {
@@ -77,21 +78,28 @@ void gfx_init(void) {
     g_tmux = t && *t;
 
     char head[48];
-    delete_head(head, sizeof head);
-    size_t n = gfx_apc(g_restore, head, NULL, 0);
+    size_t n = 0;
+    for (int b = 0; b < GFX_MAX_BANDS; b++) {
+        delete_head(head, sizeof head, b);
+        n += gfx_apc(g_restore + n, head, NULL, 0);
+    }
     // Popping the keyboard protocol has to reach the terminal itself, so it
     // needs wrapping too; the cursor and alt screen are tmux's own business.
     n += gfx_wrap(g_restore + n, "\x1b[<u", 4);
     // Mouse reporting is tmux's own mode, so it is turned off unwrapped along
     // with the cursor and the alt screen. Disabling a mode that was never on
     // costs nothing, which is why this needs no state to consult.
-    const char *tail = "\x1b[?1016l\x1b[?1006l\x1b[?1002l\x1b[?25h\x1b[?1049l";
+    const char *tail = "\x1b[?2026l\x1b[?1016l\x1b[?1006l\x1b[?1002l"
+                       "\x1b[?25h\x1b[?1049l";
     size_t tl = strlen(tail);
     memcpy(g_restore + n, tail, tl);
     g_restore_len = n + tl;
 }
 
 bool gfx_tmux(void) { return g_tmux; }
+
+void gfx_set_sync(bool ok) { g_sync = ok; }
+bool gfx_sync(void) { return g_sync; }
 
 const char *gfx_restore_seq(size_t *len) {
     *len = g_restore_len;
@@ -125,9 +133,11 @@ bool gfx_tmux_mouse_ok(void) {
 
 void gfx_delete_image(int fd) {
     char head[48], buf[64];
-    delete_head(head, sizeof head);
-    size_t n = gfx_apc(buf, head, NULL, 0);
-    (void)writeall(fd, buf, n);
+    for (int b = 0; b < GFX_MAX_BANDS; b++) {
+        delete_head(head, sizeof head, b);
+        size_t n = gfx_apc(buf, head, NULL, 0);
+        (void)writeall(fd, buf, n);
+    }
 }
 
 static size_t utf8_encode(uint32_t cp, char *out) {
@@ -164,8 +174,8 @@ void gfx_write_placeholders(int fd, const Layout *l) {
     if (cols > ROWCOLUMN_DIACRITICS_COUNT) cols = ROWCOLUMN_DIACRITICS_COUNT;
     if (rows > ROWCOLUMN_DIACRITICS_COUNT) rows = ROWCOLUMN_DIACRITICS_COUNT;
 
-    // 12 bytes a cell worst case, plus a cursor move and colour reset a row.
-    size_t need = (size_t)rows * ((size_t)cols * 12 + 32) + 32;
+    // 12 bytes a cell worst case, a cursor move a row, a colour set a band.
+    size_t need = (size_t)rows * ((size_t)cols * 12 + 32) + GFX_MAX_BANDS * 32 + 32;
     if (need > cap) {
         char *nb = realloc(buf, need);
         if (!nb) return;
@@ -176,18 +186,25 @@ void gfx_write_placeholders(int fd, const Layout *l) {
     char cell[4], drow[4], dcol[4];
     size_t celln = utf8_encode(PLACEHOLDER_CP, cell);
 
+    // Row diacritics count from the top of the band, not of the picture.
+    int nb = l->bands > 1 ? l->bands : 1;
     size_t o = 0;
-    o += (size_t)sprintf(buf + o, "\x1b[38;2;%u;%u;%um",
-                         (GFX_IMAGE_ID >> 16) & 0xFF,
-                         (GFX_IMAGE_ID >> 8) & 0xFF, GFX_IMAGE_ID & 0xFF);
-    for (int y = 0; y < rows; y++) {
-        size_t rn = utf8_encode(rowcolumn_diacritics[y], drow);
-        o += (size_t)sprintf(buf + o, "\x1b[%d;%dH", l->y + y, l->x);
-        for (int x = 0; x < cols; x++) {
-            size_t cn = utf8_encode(rowcolumn_diacritics[x], dcol);
-            memcpy(buf + o, cell, celln); o += celln;
-            memcpy(buf + o, drow, rn);    o += rn;
-            memcpy(buf + o, dcol, cn);    o += cn;
+    for (int b = 0; b < nb; b++) {
+        int cy0, cy1;
+        layout_band_cells(l, b, &cy0, &cy1);
+        if (cy1 > rows) cy1 = rows;
+        int id = GFX_IMAGE_ID + b;
+        o += (size_t)sprintf(buf + o, "\x1b[38;2;%u;%u;%um",
+                             (id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF);
+        for (int y = cy0; y < cy1; y++) {
+            size_t rn = utf8_encode(rowcolumn_diacritics[y - cy0], drow);
+            o += (size_t)sprintf(buf + o, "\x1b[%d;%dH", l->y + y, l->x);
+            for (int x = 0; x < cols; x++) {
+                size_t cn = utf8_encode(rowcolumn_diacritics[x], dcol);
+                memcpy(buf + o, cell, celln); o += celln;
+                memcpy(buf + o, drow, rn);    o += rn;
+                memcpy(buf + o, dcol, cn);    o += cn;
+            }
         }
     }
     o += (size_t)sprintf(buf + o, "\x1b[39m");

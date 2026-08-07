@@ -19,6 +19,7 @@
 #define MAX_STATE_SLOTS 10
 #define OSD_MSG_MAX 128
 #define MAX_HOTKEY_KEYS 3        // alternates per action, e.g. Ctrl+c / Ctrl+q
+#define GFX_MAX_BANDS 16
 
 // Modifiers ride in the high bits of a key code; the low bits stay a plain
 // codepoint so held-key tracking can ignore them.
@@ -56,7 +57,7 @@ enum {
     HK_QUIT, HK_PAUSE, HK_RESET, HK_SAVE_STATE, HK_LOAD_STATE,
     HK_SLOT_NEXT, HK_SLOT_PREV, HK_FAST_FORWARD, HK_MUTE, HK_STATS,
     HK_RECOLOR, HK_VOL_UP, HK_VOL_DOWN, HK_SCALE_UP, HK_SCALE_DOWN,
-    HK_TERM_SCALE,
+    HK_TERM_SCALE, HK_DAMAGE, HK_DAMAGE_DEBUG,
     HK_COUNT
 };
 
@@ -91,6 +92,9 @@ typedef struct {
     int      scale;            // default integer zoom for inline mode
     bool     term_scale;       // terminal stretches the image; false upscales
                                // here instead, at scale^2 the bytes on the wire
+    bool     damage;           // retransmit only the horizontal bands that
+                               // changed, instead of the whole picture
+    bool     damage_debug;     // outline each band as it is retransmitted
     bool     async_readback;   // hw cores: overlap GPU readback with emulation
                                // at the cost of one frame of input latency
     bool     tmux_keyboard;    // under tmux, put the terminal into the kitty
@@ -233,7 +237,36 @@ typedef struct {
     bool natural;          // transmit at natural pixel size (omit c=/r=)
     int  status_row;       // 1-based row for the status line
     bool allow_clear;      // may we clear the whole screen on relayout
+    int  bands;            // horizontal slices sent independently; 1 is the
+                           // whole picture as one image
+    bool debug;            // outline each band as it is retransmitted
+    bool exact;            // the pixels already fill the cell rect, so a band
+                           // may be any number of cells
+    int  cell_h;           // terminal cell height, for slicing an exact picture
 } Layout;
+
+// Both counts divide by `bands` exactly, so the pixel slices and the cell
+// slices describe the same bands.
+static inline void layout_band_cells(const Layout *l, int b, int *y0, int *y1) {
+    int nb = l->bands > 1 ? l->bands : 1;
+    *y0 = b * l->rows / nb;
+    *y1 = (b + 1) * l->rows / nb;
+}
+
+static inline void layout_band_rows(const Layout *l, int b, int h,
+                                    int *y0, int *y1) {
+    int nb = l->bands > 1 ? l->bands : 1;
+    if (l->exact) {
+        int cy0, cy1;
+        layout_band_cells(l, b, &cy0, &cy1);
+        *y0 = cy0 * l->cell_h;
+        *y1 = cy1 * l->cell_h;
+        if (*y1 > h) *y1 = h;
+        return;
+    }
+    *y0 = b * h / nb;
+    *y1 = (b + 1) * h / nb;
+}
 
 typedef struct {
     pthread_mutex_t m;
@@ -247,6 +280,15 @@ typedef struct {
     int      w[RB_COUNT], h[RB_COUNT];
     int      ready, busy, writing;
     int      last;              // newest submitted buffer, -1 before the first
+
+    // What went out, not the newest frame submitted: frames are dropped while
+    // the render thread is busy. Render thread only.
+    uint8_t *shown;
+    size_t   shown_cap;
+    int      shown_w, shown_h, shown_bands;
+    bool     outlined[GFX_MAX_BANDS];
+    uint8_t *band;
+    size_t   band_cap;
 
     Layout layout;
     bool   layout_dirty;
@@ -266,6 +308,7 @@ typedef struct {
     // Rows that actually differ from the frame before, summed over transmitted
     // frames. Measures the headroom a damage-region update scheme would have.
     unsigned long long rows_changed, rows_total;
+    unsigned long long bands_sent, bands_total;
 } Renderer;
 
 int  renderer_start(Renderer *r, int ttyfd);
@@ -291,6 +334,7 @@ void renderer_unlock_tty(Renderer *r);
 // like any other text - with every graphics escape wrapped in a tmux DCS.
 
 // Under 2^24 with no zero byte, so a truecolor foreground carries it whole.
+// Bands take consecutive ids from it.
 #define GFX_IMAGE_ID 0x0A5F31
 
 // Reads $TMUX once. Call before anything is written to the terminal.
@@ -301,6 +345,9 @@ bool gfx_tmux(void);
 bool gfx_passthrough_ok(void);
 // True when tmux will forward mouse events to the pane. Always true outside it.
 bool gfx_tmux_mouse_ok(void);
+// Whether the terminal honours synchronized output, DECSET 2026.
+void gfx_set_sync(bool ok);
+bool gfx_sync(void);
 // Appends one graphics APC escape: `head` is the control data, `payload` the
 // base64 body (omitted when `plen` is 0). Returns bytes written.
 size_t gfx_apc(char *out, const char *head, const char *payload, size_t plen);
@@ -355,6 +402,8 @@ void input_kbd_pop(Input *in);
 void input_mouse_enable(Input *in);
 // Forgets a button that is still down, for when its release will never arrive.
 void input_mouse_reset(Input *in);
+// Asks the terminal whether it knows a private mode, reaching past tmux.
+bool input_probe_mode(int ttyfd, int mode);
 // Drains pending input. Returns number of events written to `ev`.
 int  input_poll(Input *in, KeyEvent *ev, int max_ev);
 // The key in tmux's own spelling ("M-Left"), or NULL for one tmux cannot name.

@@ -50,6 +50,12 @@ static int  max_send_w, max_send_h;      // cap transmitted size to the window
 static int  g_scale = 2;                 // requested integer zoom (inline mode)
 static int  g_eff_scale = 1;             // zoom actually in use after fitting
 static bool g_term_scale;                // stretch in the terminal, not here
+static bool g_damage;                    // send only the bands that changed
+static bool g_damage_debug;              // outline each band as it is sent
+static bool g_pad_rect;                  // pad the frame out to the cell rect
+static int  g_rect_w, g_rect_h;          // cell rect in pixels
+static uint8_t *g_pad;
+static size_t   g_pad_cap;
 static uint8_t *g_zoom;                  // nearest-neighbour upscale buffer
 static size_t   g_zoom_cap;
 static FILE *logf;
@@ -403,6 +409,23 @@ static void base_size(int *bw, int *bh, double *dar) {
     if (*dar <= 0.0) *dar = (double)*bw / (double)*bh;
 }
 
+// Bands hold the same pixels-per-cell as the whole picture only if the count
+// divides both the pixel rows and the cells, so it is taken from what the
+// layout already chose. Changing the cell count to allow more bands would
+// change the ratio the terminal stretches by, and with it the picture.
+static int damage_bands(int h, int rows) {
+    int best = 1;
+    for (int b = 2; b <= GFX_MAX_BANDS; b++)
+        if (h % b == 0 && rows % b == 0) best = b;
+    return best;
+}
+
+// A picture padded out to the cell rect is placed at its own size, so nothing
+// is stretched and any cell boundary is a legal cut. Bands may then be uneven.
+static int exact_bands(int rows) {
+    return rows < GFX_MAX_BANDS ? (rows > 0 ? rows : 1) : GFX_MAX_BANDS;
+}
+
 // Largest integer zoom (capped by --scale) whose image still fits the window.
 static int fit_scale(int cols, int rows, int cw, int ch) {
     int bw, bh;
@@ -411,6 +434,10 @@ static int fit_scale(int cols, int rows, int cw, int ch) {
     int s = g_scale;
     while (s > 1 && (bw * s > cols * cw || bh * s > (rows - 1) * ch)) s--;
     return s < 1 ? 1 : s;
+}
+
+static bool damage_active(void) {
+    return g_damage;
 }
 
 static int inline_rows_needed(int cols, int rows, int cw, int ch) {
@@ -460,6 +487,14 @@ static void recompute_layout(void) {
         // Natural placement needs the pixels to already be at final size. When
         // the terminal is doing the stretching we must emit c=/r= instead.
         l.natural = !shrunk && !g_term_scale;
+        if (damage_active()) {
+            // Sharp mode already owns the pixels, so padding them out to the
+            // cell rect makes the placement identity and frees the cut points.
+            l.exact = !g_term_scale && !shrunk;
+            l.bands = l.exact ? exact_bands(l.rows)
+                              : damage_bands(base_h, l.rows);
+            l.natural = false;
+        }
         l.x = 1;
         // A resize can reflow the block off the bottom; keep it on screen.
         l.y = term.inline_origin;
@@ -495,6 +530,7 @@ static void recompute_layout(void) {
         if (l.rows < 1) l.rows = 1;
         if (l.cols > cols) l.cols = cols;
         if (l.rows > avail_rows) l.rows = avail_rows;
+        if (damage_active()) l.bands = damage_bands(base_h, l.rows);
         l.x = (cols - l.cols) / 2 + 1;
         l.y = (avail_rows - l.rows) / 2 + 1;
         l.natural = false;
@@ -510,15 +546,26 @@ static void recompute_layout(void) {
     // Only a natural placement is exactly its own pixel size.
     g_cell_w = cw;
     g_cell_h = ch;
+    l.cell_h = ch;
+    g_rect_w = l.cols * cw;
+    g_rect_h = l.rows * ch;
+    g_pad_rect = l.exact && l.bands > 1;
+    if (g_pad_rect) {
+        max_send_w = g_rect_w;
+        max_send_h = g_rect_h;
+    }
     g_img_x = (l.x - 1) * cw;
     g_img_y = (l.y - 1) * ch;
+    l.debug = g_damage_debug;
     g_img_w = (l.natural && !gfx_tmux()) ? max_send_w : l.cols * cw;
     g_img_h = (l.natural && !gfx_tmux()) ? max_send_h : l.rows * ch;
 
     renderer_set_layout(&rend, &l);
-    logmsg("layout: %s %dx%d cells at (%d,%d) natural=%d scale=%d send<=%dx%d",
+    logmsg("layout: %s %dx%d cells at (%d,%d) natural=%d scale=%d send<=%dx%d "
+           "bands=%d exact=%d",
            term.inline_mode ? "inline" : "fit", l.cols, l.rows, l.x, l.y,
-           (int)l.natural, g_eff_scale, max_send_w, max_send_h);
+           (int)l.natural, g_eff_scale, max_send_w, max_send_h, l.bands,
+           (int)l.exact);
 }
 
 // Hands the frame to the renderer, downscaling first if the core's output is
@@ -541,6 +588,32 @@ static void submit_frame(void) {
             src = g_zoom;
             w *= g_eff_scale;
             h *= g_eff_scale;
+        }
+    }
+
+    // Pad out to the cell rect so the placement neither stretches nor filters,
+    // which is what lets a band be sliced at any cell boundary.
+    if (g_pad_rect && w <= g_rect_w && h <= g_rect_h) {
+        size_t need = (size_t)g_rect_w * g_rect_h * 3;
+        if (need > g_pad_cap) {
+            uint8_t *nb = realloc(g_pad, need);
+            if (nb) { g_pad = nb; g_pad_cap = need; }
+        }
+        if (g_pad_cap >= need) {
+            for (int y = 0; y < g_rect_h; y++) {
+                uint8_t *row = g_pad + (size_t)y * g_rect_w * 3;
+                if (y < h) {
+                    memcpy(row, src + (size_t)y * w * 3, (size_t)w * 3);
+                    for (int x = w; x < g_rect_w; x++)
+                        memcpy(row + (size_t)x * 3, theme.bg, 3);
+                } else {
+                    for (int x = 0; x < g_rect_w; x++)
+                        memcpy(row + (size_t)x * 3, theme.bg, 3);
+                }
+            }
+            src = g_pad;
+            w = g_rect_w;
+            h = g_rect_h;
         }
     }
 
@@ -684,6 +757,33 @@ static void do_hotkey(int hk) {
                 g_term_scale ? "smoothed" : "sharp",
                 g_term_scale ? 1 : g_eff_scale * g_eff_scale);
         logmsg("term_scale -> %d (eff_scale %d)", (int)g_term_scale, g_eff_scale);
+        break;
+    }
+    case HK_DAMAGE: {
+        g_damage = !g_damage;
+        cfg.damage = g_damage;
+        recompute_layout();
+        pthread_mutex_lock(&rend.m);
+        rend.bands_sent = rend.bands_total = 0;
+        int bands = rend.layout.bands;
+        bool exact = rend.layout.exact;
+        pthread_mutex_unlock(&rend.m);
+        if (!g_damage)
+            osd("damage: off (whole picture each frame)");
+        else if (bands <= 1)
+            osd("damage: on, but this size splits into 1 band");
+        else
+            osd("damage: on, %d bands%s", bands, exact ? ", unstretched" : "");
+        logmsg("damage -> %d (bands %d exact %d)", (int)g_damage, bands, (int)exact);
+        break;
+    }
+    case HK_DAMAGE_DEBUG: {
+        g_damage_debug = !g_damage_debug;
+        cfg.damage_debug = g_damage_debug;
+        recompute_layout();
+        osd("damage outlines: %s%s", g_damage_debug ? "on" : "off",
+            g_damage && damage_active() ? "" : " (damage is off)");
+        logmsg("damage_debug -> %d", (int)g_damage_debug);
         break;
     }
     case HK_STATS:
@@ -1352,8 +1452,10 @@ int main(int argc, char **argv) {
     if (scale_arg > 0) g_scale = scale_arg;
     else g_scale = cfg.scale;
     g_term_scale = cfg.term_scale;
-    logmsg("system: '%s', scale %d, term_scale %d", system, g_scale,
-           (int)g_term_scale);
+    g_damage = cfg.damage;
+    g_damage_debug = cfg.damage_debug;
+    logmsg("system: '%s', scale %d, term_scale %d damage %d", system, g_scale,
+           (int)g_term_scale, (int)g_damage);
 
     char corebuf[600];
     if (!core_path) {
@@ -1534,6 +1636,9 @@ int main(int argc, char **argv) {
     // After the queries above, whose read windows would otherwise swallow the
     // first mouse report, and only for a system with something to point at:
     // while reporting is on the terminal's own click-drag selection is ours.
+    gfx_set_sync(input_probe_mode(ttyfd, 2026));
+    logmsg("synchronized output: %s", gfx_sync() ? "yes" : "not supported");
+
     if (g_stylus && cfg.mouse) {
         input_mouse_enable(&input);
         logmsg("mouse: on, %s coordinates%s",
@@ -1593,6 +1698,7 @@ int main(int argc, char **argv) {
     unsigned long long last_sent = 0, last_dropped = 0, last_bytes = 0;
     unsigned long long last_skipped = 0;
     unsigned long long last_rows_changed = 0, last_rows_total = 0;
+    unsigned long long last_bands_sent = 0, last_bands_total = 0;
     double last_write_sec = 0;
     double sram_check = now_sec();
 
@@ -1647,6 +1753,8 @@ int main(int argc, char **argv) {
             unsigned long long skipped = rend.skipped;
             unsigned long long rch = rend.rows_changed, rtot = rend.rows_total;
             unsigned long long bytes = rend.bytes;
+            unsigned long long bsent = rend.bands_sent, btot = rend.bands_total;
+            int lbands = rend.layout.bands;
             double write_sec = rend.write_sec;
             pthread_mutex_unlock(&rend.m);
             unsigned long long sent_delta = sent - last_sent;
@@ -1671,14 +1779,22 @@ int main(int argc, char **argv) {
             last_bytes = bytes;
             last_write_sec = write_sec;
 
+            char dmg_buf[24] = "";
+            unsigned long long btot_delta = btot - last_bands_total;
+            if (lbands > 1 && btot_delta)
+                snprintf(dmg_buf, sizeof dmg_buf, "  dmg %.0f%%/%d",
+                         (bsent - last_bands_sent) * 100.0 / btot_delta, lbands);
+            last_bands_sent = bsent;
+            last_bands_total = btot;
+
             char status[256];
             int aud_ms = audio ? (int)(audio_queued_frames(audio) * 1000.0 / rate) : -1;
             snprintf(status, sizeof status,
                      "slot %d  core %.0f  disp %.0f%s  drop %llu  skip %llu  "
-                     "aud %dms  tx %.1fMB/s  w %.1fms  rows %s%s%s",
+                     "aud %dms  tx %.1fMB/s  w %.1fms  rows %s%s%s%s",
                      slot, shown_fps, disp_fps, fast_forward ? " FF" : "",
                      drop_delta, skip_delta, aud_ms, tx_mbs, wr_ms, rows_buf,
-                     g_term_scale ? "  TS" : "", muted ? "  MUTE" : "");
+                     dmg_buf, g_term_scale ? "  TS" : "", muted ? "  MUTE" : "");
             renderer_set_status(&rend, status);
         }
 
@@ -1703,6 +1819,7 @@ int main(int argc, char **argv) {
     free(g_rgb);
     free(g_scaled);
     free(g_zoom);
+    free(g_pad);
     if (logf) fclose(logf);
     if (g_err) fclose(g_err);
     return 0;

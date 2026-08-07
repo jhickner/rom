@@ -213,6 +213,8 @@ core version, say — is reported and skipped rather than being fatal.
 | F8 | Cycle recolor mode |
 | `[` / `]` | Scale down / up (inline mode) |
 | F9 | Toggle terminal scaling (see below) |
+| F10 | Toggle damage updates (see below) |
+| F4 | Outline each band as it updates (damage debugging) |
 | `-` / `=` | Volume down / up |
 | `m` | Mute |
 
@@ -310,6 +312,45 @@ The write to the terminal dominates the render path, so the difference is
 large: at 3x zoom local zooming sends 2020 KB/frame against 225 KB, and at 4x
 it alone caps the render thread near 60fps.
 
+## Damage updates
+
+The picture can be split into horizontal bands, each its own image on its own
+cell rect, with only the bands that changed since the last frame retransmitted.
+Press F10 to toggle it while playing, or set it in the config:
+
+```ini
+[options]
+damage = false
+```
+
+Toggling it never changes how the picture is drawn, only what is retransmitted.
+How finely it splits depends on which scaling mode is in use.
+
+With `term_scale = false` the picture is already at its final pixel size, so it
+is padded out to the cell rect and each band placed at its own size. Nothing is
+stretched or filtered, every cell boundary is a legal cut, and bands may be
+uneven — 16 of them at any window size. This is where damage saves the most,
+since sharp mode transmits scale² bytes: at 4x a GBA frame drops from 1.8 MB to
+around 500 KB.
+
+With `term_scale = true` the terminal stretches each band to its cell rect, and
+a band only lands where the whole picture would have put it if it covers the
+same pixels-per-cell. That limits the split to `gcd(cells, pixel rows)` equal
+bands — 2 for a DS at 2x, often 1, in which case F10 does nothing.
+
+A frame the window is too small to show at native size is downscaled and goes
+out whole.
+
+With `show_stats` on, `dmg` reports bands sent against bands offered.
+
+F4 outlines each band in colour on the frame it is retransmitted, cycling
+through four colours so neighbouring bands are distinguishable:
+
+```ini
+[options]
+damage_debug = false
+```
+
 ## GPU readback
 
 Cores that render on the GPU (N64) have their frame read back off the GPU each
@@ -364,6 +405,7 @@ volume, scale, recoloring, or focus behavior.
 [options]
 scale            = 2
 term_scale       = true
+damage           = false
 async_readback   = true
 recolor          = hue
 recolor_strength = 1.00

@@ -33,7 +33,8 @@ static const char *stynames[STY_COUNT] = {
 static const char *hknames[HK_COUNT] = {
     "quit", "pause", "reset", "save_state", "load_state",
     "slot_next", "slot_prev", "fast_forward", "mute", "stats", "recolor",
-    "volume_up", "volume_down", "scale_up", "scale_down", "term_scale"
+    "volume_up", "volume_down", "scale_up", "scale_down", "term_scale", "damage",
+    "damage_debug"
 };
 
 const char *hotkey_name(int hk) {
@@ -134,6 +135,8 @@ void config_defaults(Config *c) {
     c->hotkey[HK_SCALE_DOWN][0]   = '[';
     c->hotkey[HK_SCALE_DOWN][1]   = '{';
     c->hotkey[HK_TERM_SCALE][0]   = KEY_F9;
+    c->hotkey[HK_DAMAGE][0]       = KEY_F10;
+    c->hotkey[HK_DAMAGE_DEBUG][0] = KEY_F4;
 
     c->volume = 100;
     c->integer_scale = false;
@@ -144,6 +147,8 @@ void config_defaults(Config *c) {
     c->recolor_strength = 1.0;
     c->scale = 2;
     c->term_scale = true;
+    c->damage = false;
+    c->damage_debug = false;
     c->async_readback = true;
     c->tmux_keyboard = true;
     c->tmux_alt_keys = true;
@@ -241,6 +246,8 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
             else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
             else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
+            else if (strcasecmp(k, "damage") == 0) c->damage = parse_bool(v);
+            else if (strcasecmp(k, "damage_debug") == 0) c->damage_debug = parse_bool(v);
             else if (strcasecmp(k, "async_readback") == 0) c->async_readback = parse_bool(v);
             else if (strcasecmp(k, "tmux_keyboard") == 0) c->tmux_keyboard = parse_bool(v);
             else if (strcasecmp(k, "tmux_alt_keys") == 0) c->tmux_alt_keys = parse_bool(v);
@@ -321,7 +328,8 @@ void config_print(const Config *c, const char *path) {
         "Quit", "Pause", "Reset", "Save state", "Load state",
         "Next slot", "Previous slot", "Fast-forward (hold)", "Mute",
         "Toggle status line", "Cycle recolor mode", "Volume up", "Volume down",
-        "Scale up", "Scale down", "Toggle terminal scale"
+        "Scale up", "Scale down", "Toggle terminal scale", "Toggle damage updates",
+        "Outline updated bands"
     };
 
     printf("Game\n");
@@ -355,6 +363,8 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %d\n", "scale", c->scale);
     printf("  %-22s %s\n", "integer_scale", c->integer_scale ? "true" : "false");
     printf("  %-22s %s\n", "term_scale", c->term_scale ? "true" : "false");
+    printf("  %-22s %s\n", "damage", c->damage ? "true" : "false");
+    printf("  %-22s %s\n", "damage_debug", c->damage_debug ? "true" : "false");
     printf("  %-22s %s\n", "async_readback", c->async_readback ? "true" : "false");
     printf("  %-22s %s\n", "tmux_keyboard", c->tmux_keyboard ? "true" : "false");
     printf("  %-22s %s\n", "tmux_alt_keys", c->tmux_alt_keys ? "true" : "false");
@@ -421,6 +431,13 @@ int config_write_default(const char *path) {
                "# upscale here instead, which keeps pixel art blocky rather than letting the\n"
                "# terminal's scaler smooth it, at the cost of transmitting scale^2 more bytes.\n");
     fprintf(f, "term_scale       = %s\n", c.term_scale ? "true" : "false");
+    fprintf(f, "# damage: retransmit only the horizontal bands of the picture that changed\n"
+               "# rather than all of it, which costs a comparison against the last frame sent\n"
+               "# and saves whatever did not move. Needs term_scale in inline mode, and shifts\n"
+               "# the picture's height slightly so the bands divide the cells evenly.\n");
+    fprintf(f, "damage           = %s\n", c.damage ? "true" : "false");
+    fprintf(f, "# damage_debug: outline each band in colour as it is retransmitted.\n");
+    fprintf(f, "damage_debug     = %s\n", c.damage_debug ? "true" : "false");
     fprintf(f, "# async_readback: for cores that render on the GPU (N64), overlap the frame\n"
                "# readback with emulation instead of stalling on it. Adds one frame of input\n"
                "# latency. No effect on software-rendered cores.\n");
