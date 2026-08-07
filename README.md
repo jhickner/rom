@@ -327,6 +327,7 @@ async_readback   = true
 recolor          = hue
 recolor_strength = 1.00
 pause_on_unfocus = true
+hide_on_blur     = false
 
 [options.gb]
 scale = 4
@@ -359,8 +360,10 @@ run without replacing it.
 | `~/.config/rom/recent` | Games played, for `--resume` |
 | `~/.config/rom/rom.log` | Frontend and core log |
 
-Games pause when the terminal loses focus and resume when it returns. Saves
-are written atomically and SRAM is autosaved every five seconds when changed.
+Games pause when the terminal loses focus and resume when it returns. With
+`hide_on_blur = true` the picture is erased from the pane while another pane
+has the focus and drawn again on return. Saves are written atomically and SRAM
+is autosaved every five seconds when changed.
 
 ## Limitations
 

@@ -170,6 +170,30 @@ static void draw_status(const Layout *l, char *buf, size_t cap,
     (void)o;
 }
 
+// Blanks the cells the picture sits in. A full clear would take the user's
+// scrollback with it in inline mode, so there the rows are erased one by one.
+static void clear_image_area(int fd, const Layout *l) {
+    if (l->allow_clear) {
+        (void)writeall(fd, "\x1b[2J", 4);
+        return;
+    }
+    int last = l->status_row > 0 ? l->status_row : l->y + l->rows;
+    for (int y = l->y; y <= last; y++) {
+        char buf[32];
+        int n = sprintf(buf, "\x1b[%d;1H\x1b[2K", y);
+        (void)writeall(fd, buf, (size_t)n);
+    }
+}
+
+// The main thread can hide the pane between a frame being picked up and its
+// write going out; with the tty held, this is the last chance to notice.
+static bool hidden_now(Renderer *r) {
+    pthread_mutex_lock(&r->m);
+    bool h = r->hidden;
+    pthread_mutex_unlock(&r->m);
+    return h;
+}
+
 static void *render_thread(void *arg) {
     Renderer *r = (Renderer *)arg;
     char *b64 = NULL, *msg = NULL;
@@ -185,6 +209,15 @@ static void *render_thread(void *arg) {
             pthread_cond_wait(&r->cv, &r->m);
         if (!r->running) { pthread_mutex_unlock(&r->m); break; }
 
+        // Hidden: drop whatever was queued rather than encoding a frame that
+        // is not going anywhere. Showing again queues the last one afresh.
+        if (r->hidden) {
+            r->ready = -1;
+            r->status_only = false;
+            pthread_mutex_unlock(&r->m);
+            continue;
+        }
+
         // Nothing new to draw: refresh the text under the image and go back to
         // sleep, leaving the picture the terminal already has in place.
         if (r->ready < 0) {
@@ -196,8 +229,10 @@ static void *render_thread(void *arg) {
             pthread_mutex_unlock(&r->m);
 
             pthread_mutex_lock(&r->wm);
-            draw_status(&l, sbuf, sizeof sbuf, osd, status);
-            (void)writeall(r->ttyfd, sbuf, strlen(sbuf));
+            if (!hidden_now(r)) {
+                draw_status(&l, sbuf, sizeof sbuf, osd, status);
+                (void)writeall(r->ttyfd, sbuf, strlen(sbuf));
+            }
             pthread_mutex_unlock(&r->wm);
             continue;
         }
@@ -236,6 +271,7 @@ static void *render_thread(void *arg) {
         }
 
         pthread_mutex_lock(&r->wm);
+        if (hidden_now(r)) { pthread_mutex_unlock(&r->wm); goto release; }
         if (clear) (void)writeall(r->ttyfd, "\x1b[2J", 4);
         if (place) gfx_write_placeholders(r->ttyfd, &l);
 
@@ -368,6 +404,30 @@ void renderer_set_osd(Renderer *r, const char *s, double seconds) {
     snprintf(r->osd, sizeof r->osd, "%s", s);
     r->osd_until = now_sec() + seconds;
     pthread_mutex_unlock(&r->m);
+}
+
+void renderer_set_hidden(Renderer *r, bool hidden) {
+    if (!r->running) return;
+    // The tty is taken first and held across the whole change, so a frame the
+    // render thread is already carrying cannot land after the image is dropped.
+    pthread_mutex_lock(&r->wm);
+    pthread_mutex_lock(&r->m);
+    bool changed = r->hidden != hidden;
+    r->hidden = hidden;
+    Layout l = r->layout;
+    if (changed && !hidden) {
+        // Nothing of the picture is left on screen: the image, and under tmux
+        // its placeholder cells, both have to go out again in full.
+        r->layout_dirty = true;
+        if (r->last >= 0) r->ready = r->last;
+        pthread_cond_signal(&r->cv);
+    }
+    pthread_mutex_unlock(&r->m);
+    if (changed && hidden) {
+        gfx_delete_image(r->ttyfd);
+        clear_image_area(r->ttyfd, &l);
+    }
+    pthread_mutex_unlock(&r->wm);
 }
 
 void renderer_lock_tty(Renderer *r) {

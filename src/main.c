@@ -607,8 +607,9 @@ static void handle_input(void) {
                    (int)ev[i].pressed, (int)ev[i].repeat);
         if (ev[i].key == KEY_FOCUS_OUT || ev[i].key == KEY_FOCUS_IN) {
             bool out = (ev[i].key == KEY_FOCUS_OUT);
-            logmsg("focus %s (pause_on_unfocus=%d)", out ? "out" : "in",
-                   (int)cfg.pause_on_unfocus);
+            logmsg("focus %s (pause_on_unfocus=%d hide_on_blur=%d)",
+                   out ? "out" : "in", (int)cfg.pause_on_unfocus,
+                   (int)cfg.hide_on_blur);
             if (out) {
                 // The release for anything held now will never arrive, so drop
                 // every key rather than leaving Link walking into a wall.
@@ -628,6 +629,7 @@ static void handle_input(void) {
                 else input_kbd_push(&input);
                 renderer_unlock_tty(&rend);
             }
+            if (cfg.hide_on_blur) renderer_set_hidden(&rend, out);
             if (cfg.pause_on_unfocus) {
                 focus_paused = out;
                 if (audio) audio_flush(audio);

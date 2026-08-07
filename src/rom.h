@@ -78,6 +78,7 @@ typedef struct {
     bool     integer_scale;    // snap image to whole multiples of native size
     bool     show_stats;
     bool     pause_on_unfocus; // pause when the terminal loses focus
+    bool     hide_on_blur;     // erase the image while the pane is unfocused
     int      recolor;          // RECOLOR_*
     double   recolor_strength; // 0..1 blend against the original colours
     int      scale;            // default integer zoom for inline mode
@@ -243,6 +244,7 @@ typedef struct {
     Layout layout;
     bool   layout_dirty;
     bool   status_only;         // image unchanged; only the text needs redrawing
+    bool   hidden;              // nothing goes to the tty until it is shown again
 
     char status[256];
     char osd[OSD_MSG_MAX];
@@ -266,6 +268,9 @@ void renderer_submit(Renderer *r, const uint8_t *rgb, int w, int h);
 void renderer_set_layout(Renderer *r, const Layout *l);
 void renderer_set_status(Renderer *r, const char *s);
 void renderer_set_osd(Renderer *r, const char *s, double seconds);
+// Drops the image and blanks its cells, holding every write off the tty until
+// it is called again with false, which redraws the last frame in full.
+void renderer_set_hidden(Renderer *r, bool hidden);
 // Take/release the tty so the main thread can emit escape codes without
 // landing in the middle of a frame transmission.
 void renderer_lock_tty(Renderer *r);

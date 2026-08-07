@@ -127,6 +127,7 @@ void config_defaults(Config *c) {
     c->integer_scale = false;
     c->show_stats = false;      // F1 toggles it on when you want the numbers
     c->pause_on_unfocus = true;
+    c->hide_on_blur = false;
     c->recolor = RECOLOR_OFF;
     c->recolor_strength = 1.0;
     c->scale = 2;
@@ -215,6 +216,7 @@ static int config_pass(Config *c, const char *path, const char *system,
             else if (strcasecmp(k, "integer_scale") == 0) c->integer_scale = parse_bool(v);
             else if (strcasecmp(k, "show_stats") == 0) c->show_stats = parse_bool(v);
             else if (strcasecmp(k, "pause_on_unfocus") == 0) c->pause_on_unfocus = parse_bool(v);
+            else if (strcasecmp(k, "hide_on_blur") == 0) c->hide_on_blur = parse_bool(v);
             else if (strcasecmp(k, "recolor_strength") == 0) c->recolor_strength = atof(v);
             else if (strcasecmp(k, "scale") == 0) c->scale = atoi(v);
             else if (strcasecmp(k, "term_scale") == 0) c->term_scale = parse_bool(v);
@@ -330,6 +332,7 @@ void config_print(const Config *c, const char *path) {
     printf("  %-22s %s\n", "tmux_alt_keys", c->tmux_alt_keys ? "true" : "false");
     printf("  %-22s %s\n", "show_stats", c->show_stats ? "true" : "false");
     printf("  %-22s %s\n", "pause_on_unfocus", c->pause_on_unfocus ? "true" : "false");
+    printf("  %-22s %s\n", "hide_on_blur", c->hide_on_blur ? "true" : "false");
     printf("  %-22s %s\n", "recolor", recolor_mode_name(c->recolor));
     printf("  %-22s %.2f\n", "recolor_strength", c->recolor_strength);
 
@@ -369,6 +372,9 @@ int config_write_default(const char *path) {
     fprintf(f, "integer_scale    = %s\n", c.integer_scale ? "true" : "false");
     fprintf(f, "show_stats       = %s\n", c.show_stats ? "true" : "false");
     fprintf(f, "pause_on_unfocus = %s\n", c.pause_on_unfocus ? "true" : "false");
+    fprintf(f, "# hide_on_blur: erase the picture from the pane while another pane has the\n"
+               "# focus, and draw it again on return.\n");
+    fprintf(f, "hide_on_blur     = %s\n", c.hide_on_blur ? "true" : "false");
     fprintf(f, "scale            = %d          # inline-mode integer zoom, 1-8\n", c.scale);
     fprintf(f, "# term_scale: the terminal stretches the image to the cell rect. Set false to\n"
                "# upscale here instead, which keeps pixel art blocky rather than letting the\n"
