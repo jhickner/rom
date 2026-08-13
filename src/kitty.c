@@ -111,7 +111,7 @@ static size_t build_band(char *out, const char *b64, size_t blen,
     int first = 1;
     char head[96];
     bool tmux = gfx_tmux();
-    int id = GFX_IMAGE_ID + band;
+    int id = gfx_image_id() + band;
     int cy0, cy1;
     layout_band_cells(l, band, &cy0, &cy1);
     int brows = cy1 - cy0;
@@ -323,7 +323,16 @@ static void *render_thread(void *arg) {
         bool sync = nb > 1 && gfx_sync();
         if (sync) (void)writeall(r->ttyfd, bsu, bsulen);
         if (clear) (void)writeall(r->ttyfd, "\x1b[2J", 4);
-        if (place) gfx_write_placeholders(r->ttyfd, &l);
+        if (place) {
+            // The cells the old layout stamped are text and stay put, naming
+            // an image that is about to be retransmitted - so without this the
+            // picture goes on being drawn wherever they landed as well as in
+            // the new rectangle. Retiring the id makes them inert wherever the
+            // reflow put them, which erasing a recorded rectangle cannot do.
+            if (!clear && r->stamped) gfx_retire_image(r->ttyfd);
+            gfx_write_placeholders(r->ttyfd, &l);
+            r->stamped = true;
+        }
 
         size_t n = 0;
         size_t stride = (size_t)w * 3;

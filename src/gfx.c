@@ -9,16 +9,48 @@
 // The codepoint kitty reserves for image placeholder cells.
 #define PLACEHOLDER_CP 0x10EEEEu
 
+static int      g_img_id;
+static unsigned g_img_gen;
+
+int gfx_image_id(void) {
+    if (!g_img_id) {
+        unsigned pid = (unsigned)getpid();
+        // The three bytes travel as a foreground colour, so none may be zero.
+        // The low byte starts at 1 and steps by 0x20, which leaves the band
+        // offset room to run underneath it without carrying into the next.
+        unsigned lo  = (((pid + g_img_gen) & 0x07u) << 5) | 1u;
+        unsigned mid = ((((pid >> 8) & 0xFFu) + g_img_gen / 8u) & 0xFFu) | 1u;
+        g_img_id = (int)(0x0A0000u | (mid << 8) | lo);
+    }
+    return g_img_id;
+}
+
 // Control data for dropping one of our images. The id has to reach the terminal
-// in decimal, so it is formatted rather than stringified from the macro.
+// in decimal, so it is formatted rather than stringified.
 static void delete_head(char *out, size_t cap, int band) {
-    snprintf(out, cap, "a=d,d=I,i=%d,q=2", GFX_IMAGE_ID + band);
+    snprintf(out, cap, "a=d,d=I,i=%d,q=2", gfx_image_id() + band);
 }
 
 static bool   g_tmux;
+static bool   g_tmux_redraw;
 static bool   g_sync;
 static char   g_restore[2048];
 static size_t g_restore_len;
+
+// "tmux 3.7b" / "tmux next-3.8" -> 307 / 308. 0 when it cannot be parsed.
+static int tmux_version(void) {
+    FILE *p = popen("tmux -V 2>/dev/null", "r");
+    if (!p) return 0;
+    char buf[64] = "";
+    bool got = fgets(buf, sizeof buf, p) != NULL;
+    pclose(p);
+    if (!got) return 0;
+    const char *s = buf;
+    while (*s && (*s < '0' || *s > '9')) s++;
+    int maj = 0, min = 0;
+    if (sscanf(s, "%d.%d", &maj, &min) < 2) return 0;
+    return maj * 100 + min;
+}
 
 static int writeall(int fd, const char *p, size_t n) {
     while (n) {
@@ -73,10 +105,7 @@ size_t gfx_wrap(char *out, const char *seq, size_t len) {
     return o;
 }
 
-void gfx_init(void) {
-    const char *t = getenv("TMUX");
-    g_tmux = t && *t;
-
+static void build_restore(void) {
     char head[48];
     size_t n = 0;
     for (int b = 0; b < GFX_MAX_BANDS; b++) {
@@ -94,6 +123,31 @@ void gfx_init(void) {
     size_t tl = strlen(tail);
     memcpy(g_restore + n, tail, tl);
     g_restore_len = n + tl;
+}
+
+void gfx_init(void) {
+    const char *t = getenv("TMUX");
+    g_tmux = t && *t;
+    g_tmux_redraw = g_tmux && tmux_version() >= 307;
+    build_restore();
+}
+
+// Gives up on the cells currently carrying our id and starts using another.
+//
+// Placeholder cells are ordinary text, so they stay where they were drawn and
+// go on naming the id they were drawn with. Erasing them at the rectangle we
+// recorded does not work: a pane resize makes tmux reflow its contents, so
+// those rows no longer say where the cells ended up - it would clear whatever
+// moved into them and leave the real cells behind, still naming a live image
+// and so drawing a second copy of the picture.
+//
+// So the images are deleted and the id moved on instead. Whatever cells were
+// left behind now name nothing, and a placeholder with no image draws blank.
+void gfx_retire_image(int fd) {
+    gfx_delete_image(fd);
+    g_img_gen++;
+    g_img_id = 0;                    // recomputed, from the new generation
+    build_restore();
 }
 
 bool gfx_tmux(void) { return g_tmux; }
@@ -174,8 +228,9 @@ void gfx_write_placeholders(int fd, const Layout *l) {
     if (cols > ROWCOLUMN_DIACRITICS_COUNT) cols = ROWCOLUMN_DIACRITICS_COUNT;
     if (rows > ROWCOLUMN_DIACRITICS_COUNT) rows = ROWCOLUMN_DIACRITICS_COUNT;
 
-    // 12 bytes a cell worst case, a cursor move a row, a colour set a band.
-    size_t need = (size_t)rows * ((size_t)cols * 12 + 32) + GFX_MAX_BANDS * 32 + 32;
+    // 12 bytes a cell worst case, a cursor move a row, a colour set a band,
+    // and the synchronized-update pair below.
+    size_t need = (size_t)rows * ((size_t)cols * 12 + 32) + GFX_MAX_BANDS * 32 + 64;
     if (need > cap) {
         char *nb = realloc(buf, need);
         if (!nb) return;
@@ -186,14 +241,24 @@ void gfx_write_placeholders(int fd, const Layout *l) {
     char cell[4], drow[4], dcol[4];
     size_t celln = utf8_encode(PLACEHOLDER_CP, cell);
 
+    // tmux 3.7 drops a cell's combining diacritics on the way to the terminal
+    // whenever the pane is not at column 0: screen_write_combine() tests
+    // visibility with a pane-relative x against window coordinates, decides the
+    // cell is covered by whatever pane really sits there, and skips the write.
+    // The cells still land in tmux's grid intact, so ending a synchronized
+    // update - which tmux consumes itself, and answers with a full pane redraw
+    // out of that grid - puts them on screen correctly. Unwrapped on purpose:
+    // this one is addressed to tmux, not to the terminal underneath it.
+    size_t o = 0;
+    if (g_tmux_redraw) { memcpy(buf, "\x1b[?2026h", 8); o = 8; }
+
     // Row diacritics count from the top of the band, not of the picture.
     int nb = l->bands > 1 ? l->bands : 1;
-    size_t o = 0;
     for (int b = 0; b < nb; b++) {
         int cy0, cy1;
         layout_band_cells(l, b, &cy0, &cy1);
         if (cy1 > rows) cy1 = rows;
-        int id = GFX_IMAGE_ID + b;
+        int id = gfx_image_id() + b;
         o += (size_t)sprintf(buf + o, "\x1b[38;2;%u;%u;%um",
                              (id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF);
         for (int y = cy0; y < cy1; y++) {
@@ -208,5 +273,6 @@ void gfx_write_placeholders(int fd, const Layout *l) {
         }
     }
     o += (size_t)sprintf(buf + o, "\x1b[39m");
+    if (g_tmux_redraw) { memcpy(buf + o, "\x1b[?2026l", 8); o += 8; }
     (void)writeall(fd, buf, o);
 }

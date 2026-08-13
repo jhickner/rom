@@ -292,6 +292,7 @@ typedef struct {
 
     Layout layout;
     bool   layout_dirty;
+    bool   stamped;             // placeholder cells have been laid down once
     bool   status_only;         // image unchanged; only the text needs redrawing
     bool   hidden;              // nothing goes to the tty until it is shown again
 
@@ -334,8 +335,14 @@ void renderer_unlock_tty(Renderer *r);
 // like any other text - with every graphics escape wrapped in a tmux DCS.
 
 // Under 2^24 with no zero byte, so a truecolor foreground carries it whole.
-// Bands take consecutive ids from it.
-#define GFX_IMAGE_ID 0x0A5F31
+// Bands take consecutive ids from it, so the low byte leaves room for
+// GFX_MAX_BANDS of them.
+//
+// The low bytes come from the pid rather than being fixed: inline mode leaves
+// placeholder cells behind in the scrollback, and those cells go on naming
+// whatever id they were drawn with. A second run reusing the id would light the
+// previous run's block up with the new picture.
+int gfx_image_id(void);
 
 // Reads $TMUX once. Call before anything is written to the terminal.
 void gfx_init(void);
@@ -358,6 +365,9 @@ size_t gfx_wrap(char *out, const char *seq, size_t len);
 size_t gfx_apc_max(size_t plen);
 // Drops our image from the terminal.
 void gfx_delete_image(int fd);
+// Drops the current images and moves the id on, so placeholder cells left
+// behind by an old layout name nothing instead of drawing a second copy.
+void gfx_retire_image(int fd);
 // Lays down the placeholder cells for `l`. Render thread only: it reuses one
 // internal buffer.
 void gfx_write_placeholders(int fd, const Layout *l);
